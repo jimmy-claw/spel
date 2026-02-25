@@ -86,10 +86,10 @@ fn test_parse_and_generate() {
     assert!(output.client_code.contains("async fn create("));
     assert!(output.client_code.contains("async fn approve("));
 
-    // PDA computation
+    // PDA computation lives in the client
     assert!(output.client_code.contains("compute_multisig_state_pda"));
 
-    // Correct endianness
+    // Correct endianness — in client's parse_program_id_hex
     assert!(output.client_code.contains("from_le_bytes"));
 }
 
@@ -103,14 +103,19 @@ fn test_ffi_generation() {
     assert!(output.ffi_code.contains("pub extern \"C\" fn my_multisig_free_string("));
     assert!(output.ffi_code.contains("pub extern \"C\" fn my_multisig_version("));
 
-    // Account parsing - base58 support
+    // AccountId parsing helper emitted in FFI
     assert!(output.ffi_code.contains("parse_account_id"));
 
-    // ProgramId parsing - LE byte order
-    assert!(output.ffi_code.contains("from_le_bytes"));
+    // FFI imports the generated client module
+    assert!(output.ffi_code.contains("use super::client::*"));
 
-    // PDA computation
-    assert!(output.ffi_code.contains("compute_pda"));
+    // FFI instantiates the client struct and calls methods via blocking tokio runtime
+    assert!(output.ffi_code.contains("MyMultisigClient::new"));
+    assert!(output.ffi_code.contains("tokio::runtime::Runtime::new"));
+    assert!(output.ffi_code.contains("rt.block_on"));
+
+    // FFI returns tx_hash JSON
+    assert!(output.ffi_code.contains("tx_hash"));
 }
 
 #[test]
@@ -124,24 +129,35 @@ fn test_header_generation() {
 }
 
 #[test]
-fn test_account_order_preserved() {
+fn test_account_order_in_client() {
     let output = generate_from_idl_json(SAMPLE_IDL).expect("codegen should succeed");
 
-    // For approve: account_ids vec should list accounts in IDL order
+    // Account ordering is now enforced in the client (accounts struct + account_ids vec).
+    // For approve: the IDL order is multisig_state, proposal, member.
+    let client = &output.client_code;
+    let approve_struct_start = client.find("pub struct ApproveAccounts").unwrap();
+    let approve_section = &client[approve_struct_start..];
+
+    let ms_pos = approve_section.find("multisig_state").unwrap();
+    let prop_pos = approve_section.find("proposal").unwrap();
+    let member_pos = approve_section.find("member").unwrap();
+
+    assert!(ms_pos < prop_pos, "multisig_state should come before proposal in ApproveAccounts");
+    assert!(prop_pos < member_pos, "proposal should come before member in ApproveAccounts");
+}
+
+#[test]
+fn test_ffi_calls_client_methods() {
+    let output = generate_from_idl_json(SAMPLE_IDL).expect("codegen should succeed");
+
+    // The FFI impl function should build a CreateAccounts struct and call client.create(...)
     let ffi = &output.ffi_code;
-    let approve_impl_start = ffi.find("fn my_multisig_approve_impl").unwrap();
-    let approve_section = &ffi[approve_impl_start..];
+    assert!(ffi.contains("CreateAccounts {"), "FFI should build CreateAccounts struct");
+    assert!(ffi.contains("client.create("), "FFI should call client.create(...)");
 
-    // Find the account_ids vec construction
-    let vec_start = approve_section.find("let mut account_ids = vec![").unwrap();
-    let vec_section = &approve_section[vec_start..];
-
-    let ms_pos = vec_section.find("multisig_state").unwrap();
-    let prop_pos = vec_section.find("proposal").unwrap();
-    let member_pos = vec_section.find("member").unwrap();
-
-    assert!(ms_pos < prop_pos, "multisig_state should come before proposal in account_ids");
-    assert!(prop_pos < member_pos, "proposal should come before member in account_ids");
+    // Same for approve
+    assert!(ffi.contains("ApproveAccounts {"), "FFI should build ApproveAccounts struct");
+    assert!(ffi.contains("client.approve("), "FFI should call client.approve(...)");
 }
 
 #[test]
@@ -182,4 +198,6 @@ fn test_rest_accounts() {
     }"#;
     let output = generate_from_idl_json(idl).expect("should handle rest accounts");
     assert!(output.client_code.contains("pub signers: Vec<AccountId>"));
+    // FFI should handle rest accounts as optional array, defaulting to empty
+    assert!(output.ffi_code.contains("signers"));
 }
