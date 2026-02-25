@@ -31,6 +31,11 @@ pub struct LezIdl {
     /// Program metadata (lssa-lang compat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<IdlMetadata>,
+    /// Optional fully-qualified Rust path to the program's instruction enum.
+    /// When set, generated FFI imports this type instead of generating a local enum.
+    /// Example: "multisig_core::Instruction"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_type: Option<String>,
 }
 
 /// Program metadata (lssa-lang compat).
@@ -195,6 +200,7 @@ impl LezIdl {
             errors: vec![],
             spec: None,
             metadata: None,
+            instruction_type: None,
         }
     }
 

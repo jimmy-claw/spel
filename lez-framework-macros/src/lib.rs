@@ -932,6 +932,7 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo]) -> TokenS
                 types: vec![],
                 errors: vec![],
                 spec: Some("0.1.0".to_string()),
+                instruction_type: None,
                 metadata: Some(lez_framework::idl::IdlMetadata {
                     name: #program_name.to_string(),
                     version: "0.1.0".to_string(),

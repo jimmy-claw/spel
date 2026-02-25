@@ -86,10 +86,10 @@ fn test_parse_and_generate() {
     assert!(output.client_code.contains("async fn create("));
     assert!(output.client_code.contains("async fn approve("));
 
-    // PDA computation
+    // PDA computation lives in the client
     assert!(output.client_code.contains("compute_multisig_state_pda"));
 
-    // Correct endianness
+    // Correct endianness — in client's parse_program_id_hex
     assert!(output.client_code.contains("from_le_bytes"));
 }
 
@@ -103,14 +103,20 @@ fn test_ffi_generation() {
     assert!(output.ffi_code.contains("pub extern \"C\" fn my_multisig_free_string("));
     assert!(output.ffi_code.contains("pub extern \"C\" fn my_multisig_version("));
 
-    // Account parsing - base58 support
+    // AccountId parsing helper emitted in FFI
     assert!(output.ffi_code.contains("parse_account_id"));
 
-    // ProgramId parsing - LE byte order
-    assert!(output.ffi_code.contains("from_le_bytes"));
+    // FFI is self-contained (inline transaction building, no super::client import)
+    assert!(!output.ffi_code.contains("use super::client::*"));
 
-    // PDA computation
-    assert!(output.ffi_code.contains("compute_pda"));
+    // FFI emits full WalletCore transaction building
+    assert!(output.ffi_code.contains("use wallet::WalletCore"));
+    assert!(output.ffi_code.contains("tokio::runtime::Runtime::new"));
+    assert!(output.ffi_code.contains("rt.block_on"));
+    assert!(output.ffi_code.contains("send_tx_public"));
+
+    // FFI returns tx_hash JSON
+    assert!(output.ffi_code.contains("tx_hash"));
 }
 
 #[test]
@@ -124,24 +130,32 @@ fn test_header_generation() {
 }
 
 #[test]
-fn test_account_order_preserved() {
+fn test_account_order_in_client() {
     let output = generate_from_idl_json(SAMPLE_IDL).expect("codegen should succeed");
 
-    // For approve: account_ids vec should list accounts in IDL order
+    // Account ordering is now enforced in the client (accounts struct + account_ids vec).
+    // For approve: the IDL order is multisig_state, proposal, member.
+    let client = &output.client_code;
+    let approve_struct_start = client.find("pub struct ApproveAccounts").unwrap();
+    let approve_section = &client[approve_struct_start..];
+
+    let ms_pos = approve_section.find("multisig_state").unwrap();
+    let prop_pos = approve_section.find("proposal").unwrap();
+    let member_pos = approve_section.find("member").unwrap();
+
+    assert!(ms_pos < prop_pos, "multisig_state should come before proposal in ApproveAccounts");
+    assert!(prop_pos < member_pos, "proposal should come before member in ApproveAccounts");
+}
+
+#[test]
+fn test_ffi_calls_client_methods() {
+    let output = generate_from_idl_json(SAMPLE_IDL).expect("codegen should succeed");
+
+    // The FFI impl builds instruction enum and submits transaction inline
     let ffi = &output.ffi_code;
-    let approve_impl_start = ffi.find("fn my_multisig_approve_impl").unwrap();
-    let approve_section = &ffi[approve_impl_start..];
-
-    // Find the account_ids vec construction
-    let vec_start = approve_section.find("let mut account_ids = vec![").unwrap();
-    let vec_section = &approve_section[vec_start..];
-
-    let ms_pos = vec_section.find("multisig_state").unwrap();
-    let prop_pos = vec_section.find("proposal").unwrap();
-    let member_pos = vec_section.find("member").unwrap();
-
-    assert!(ms_pos < prop_pos, "multisig_state should come before proposal in account_ids");
-    assert!(prop_pos < member_pos, "proposal should come before member in account_ids");
+    assert!(ffi.contains("Message::try_new"), "FFI should build Message");
+    assert!(ffi.contains("send_tx_public"), "FFI should submit transaction");
+    assert!(ffi.contains("MyMultisigInstruction"), "FFI should reference instruction enum");
 }
 
 #[test]
@@ -182,4 +196,6 @@ fn test_rest_accounts() {
     }"#;
     let output = generate_from_idl_json(idl).expect("should handle rest accounts");
     assert!(output.client_code.contains("pub signers: Vec<AccountId>"));
+    // FFI should handle rest accounts as optional array, defaulting to empty
+    assert!(output.ffi_code.contains("signers"));
 }
