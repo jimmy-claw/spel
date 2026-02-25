@@ -2,6 +2,13 @@
 //!
 //! Generates `extern "C"` functions that accept JSON strings and return JSON strings.
 //! The generated FFI includes full transaction building via `wallet::WalletCore`.
+//!
+//! If the IDL has `instruction_type` set (e.g. `"multisig_core::Instruction"`),
+//! the generated code imports and uses that type directly — ensuring correct
+//! serde/borsh representation when the instruction is sent to the zkVM guest.
+//!
+//! If `instruction_type` is absent, a local enum is generated with
+//! `#[derive(Serialize, Deserialize)]` which works for simple programs.
 
 use lez_framework_core::idl::*;
 use std::fmt::Write;
@@ -11,7 +18,15 @@ use crate::util::*;
 pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     let mut out = String::new();
     let prefix = snake_case(&idl.name);
-    let instr_enum = pascal_case(&idl.name) + "Instruction";
+    let local_enum = pascal_case(&idl.name) + "Instruction";
+
+    // When instruction_type is set, we import it as `ProgramInstruction`.
+    // When absent, we generate a local enum named `{Program}Instruction`.
+    let instr_type = if idl.instruction_type.is_some() {
+        "ProgramInstruction".to_string()
+    } else {
+        local_enum.clone()
+    };
 
     // Header
     writeln!(out, "//! Auto-generated C FFI for the {} program.", idl.name).unwrap();
@@ -26,35 +41,40 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     // Imports
     writeln!(out, "use std::ffi::{{CStr, CString}};").unwrap();
     writeln!(out, "use std::os::raw::c_char;").unwrap();
-    writeln!(out, "use serde::{{Serialize, Deserialize}};").unwrap();
     writeln!(out, "use serde_json::{{Value, json}};").unwrap();
     writeln!(out, "use sha2::{{Sha256, Digest}};").unwrap();
     writeln!(out, "use nssa::{{AccountId, ProgramId, PublicTransaction}};").unwrap();
     writeln!(out, "use nssa::public_transaction::{{Message, WitnessSet}};").unwrap();
     writeln!(out, "use wallet::WalletCore;").unwrap();
-    writeln!(out).unwrap();
 
-    // Instruction enum
-    writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]").unwrap();
-    writeln!(out, "pub enum {instr_enum} {{").unwrap();
-    for ix in &idl.instructions {
-        let variant = pascal_case(&ix.name);
-        if ix.args.is_empty() {
-            writeln!(out, "    {variant},").unwrap();
-        } else {
-            writeln!(out, "    {variant} {{").unwrap();
-            for arg in &ix.args {
-                let name = rust_ident(&arg.name);
-                let ty = idl_type_to_rust(&arg.type_);
-                writeln!(out, "        {name}: {ty},").unwrap();
+    // Import or generate instruction type
+    if let Some(ref itype) = idl.instruction_type {
+        writeln!(out, "use {} as ProgramInstruction;", itype).unwrap();
+    } else {
+        // Generate local instruction enum
+        writeln!(out, "use serde::{{Serialize, Deserialize}};").unwrap();
+        writeln!(out).unwrap();
+        writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]").unwrap();
+        writeln!(out, "pub enum {local_enum} {{").unwrap();
+        for ix in &idl.instructions {
+            let variant = pascal_case(&ix.name);
+            if ix.args.is_empty() {
+                writeln!(out, "    {variant},").unwrap();
+            } else {
+                writeln!(out, "    {variant} {{").unwrap();
+                for arg in &ix.args {
+                    let name = rust_ident(&arg.name);
+                    let ty = idl_type_to_rust(&arg.type_);
+                    writeln!(out, "        {name}: {ty},").unwrap();
+                }
+                writeln!(out, "    }},").unwrap();
             }
-            writeln!(out, "    }},").unwrap();
         }
+        writeln!(out, "}}").unwrap();
     }
-    writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    // Helpers
+    // Helper fns
     writeln!(out, "fn cstr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {{").unwrap();
     writeln!(out, "    if ptr.is_null() {{ return Err(\"null pointer\".into()); }}").unwrap();
     writeln!(out, "    unsafe {{ CStr::from_ptr(ptr) }}.to_str().map_err(|e| format!(\"invalid UTF-8: {{}}\", e))").unwrap();
@@ -67,7 +87,8 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "fn error_json(msg: &str) -> *mut c_char {{").unwrap();
-    writeln!(out, "    to_cstring(format!(r#\"{{\"success\":false,\"error\":{{}}}}\"#, serde_json::json!(msg)))").unwrap();
+    writeln!(out, "    let body = format!(\"{{{{\\\"success\\\":false,\\\"error\\\":{{}}}}}\", serde_json::json!(msg));").unwrap();
+    writeln!(out, "    to_cstring(body)").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
@@ -81,11 +102,11 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     writeln!(out, "        hasher.update(&padded);").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out, "    let hash: [u8; 32] = hasher.finalize().into();").unwrap();
-    writeln!(out, "    AccountId::from(hash)").unwrap();
+    writeln!(out, "    AccountId::new(hash)").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    // parse_program_id_hex helper
+    // parse_program_id_hex
     writeln!(out, "fn parse_program_id_hex(s: &str) -> Result<ProgramId, String> {{").unwrap();
     writeln!(out, "    let s = s.trim_start_matches(\"0x\");").unwrap();
     writeln!(out, "    if s.len() != 64 {{ return Err(format!(\"program_id hex must be 64 chars, got {{}}\", s.len())); }}").unwrap();
@@ -98,31 +119,31 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    // parse_program_id helper (alias, used for ProgramId-typed args)
+    // parse_program_id (alias for ProgramId-typed args)
     writeln!(out, "fn parse_program_id(s: &str) -> Result<ProgramId, String> {{").unwrap();
     writeln!(out, "    parse_program_id_hex(s)").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-// parse_account_id helper
+    // parse_account_id
     writeln!(out, "fn parse_account_id(s: &str) -> Result<AccountId, String> {{").unwrap();
     writeln!(out, "    if let Ok(id) = s.parse() {{ return Ok(id); }}").unwrap();
     writeln!(out, "    let s = s.trim_start_matches(\"0x\");").unwrap();
     writeln!(out, "    if s.len() == 64 {{").unwrap();
     writeln!(out, "        let bytes = hex::decode(s).map_err(|e| format!(\"invalid hex: {{}}\", e))?;").unwrap();
     writeln!(out, "        let mut arr = [0u8; 32]; arr.copy_from_slice(&bytes);").unwrap();
-    writeln!(out, "        return Ok(AccountId::from(arr));").unwrap();
+    writeln!(out, "        return Ok(AccountId::new(arr));").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out, "    Err(format!(\"invalid AccountId: {{}}\", s))").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    // init_wallet helper
+    // init_wallet
     writeln!(out, "fn init_wallet(v: &Value) -> Result<WalletCore, String> {{").unwrap();
-    writeln!(out, "    let wallet_path = v[\"wallet_path\"].as_str().ok_or(\"missing wallet_path\")?;").unwrap();
-    writeln!(out, "    let sequencer_url = v[\"sequencer_url\"].as_str().ok_or(\"missing sequencer_url\")?;").unwrap();
-    writeln!(out, "    std::env::set_var(\"NSSA_WALLET_HOME_DIR\", wallet_path);").unwrap();
-    writeln!(out, "    WalletCore::new(sequencer_url).map_err(|e| format!(\"wallet init: {{}}\", e))").unwrap();
+    writeln!(out, "    if let Some(p) = v[\"wallet_path\"].as_str() {{").unwrap();
+    writeln!(out, "        std::env::set_var(\"NSSA_WALLET_HOME_DIR\", p);").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "    WalletCore::from_env().map_err(|e| format!(\"wallet init: {{}}\", e))").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
@@ -130,8 +151,6 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     for ix in &idl.instructions {
         let fn_name = format!("{}_{}", prefix, snake_case(&ix.name));
         let variant = pascal_case(&ix.name);
-
-        // Collect signer account indices
         let signer_accounts: Vec<&IdlAccountItem> = ix.accounts.iter().filter(|a| a.signer).collect();
 
         writeln!(out, "/// FFI: {} instruction.", ix.name).unwrap();
@@ -152,7 +171,7 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
         writeln!(out, "    let wallet = init_wallet(&v)?;").unwrap();
         writeln!(out).unwrap();
 
-        // Parse instruction args
+        // Parse args
         for arg in &ix.args {
             let name = rust_ident(&arg.name);
             let parse_expr = idl_type_to_json_parse(&arg.type_, &format!("v[\"{}\"]", arg.name));
@@ -163,7 +182,12 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
         // Resolve accounts
         for acc in &ix.accounts {
             let name = rust_ident(&acc.name);
-            if let Some(pda) = &acc.pda {
+            if acc.rest {
+                // rest accounts parsed from JSON array
+                writeln!(out, "    let {name}: Vec<AccountId> = v[\"{}\"].as_array()", acc.name).unwrap();
+                writeln!(out, "        .ok_or(\"missing {}\")?", acc.name).unwrap();
+                writeln!(out, "        .iter().map(|a| parse_account_id(a.as_str().ok_or(\"expected string\")?)).collect::<Result<Vec<_>,_>>()?;").unwrap();
+            } else if let Some(pda) = &acc.pda {
                 writeln!(out, "    let {name} = compute_pda(&[").unwrap();
                 for seed in &pda.seeds {
                     match seed {
@@ -178,15 +202,17 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
                     acc.name, acc.name).unwrap();
             }
         }
-
         writeln!(out).unwrap();
 
-        // Build account_ids vec
-        writeln!(out, "    let account_ids: Vec<AccountId> = vec![").unwrap();
-        for acc in &ix.accounts {
+        // Build account_ids vec (non-rest accounts first, then rest)
+        writeln!(out, "    let mut account_ids: Vec<AccountId> = vec![").unwrap();
+        for acc in ix.accounts.iter().filter(|a| !a.rest) {
             writeln!(out, "        {},", rust_ident(&acc.name)).unwrap();
         }
         writeln!(out, "    ];").unwrap();
+        for acc in ix.accounts.iter().filter(|a| a.rest) {
+            writeln!(out, "    account_ids.extend({});", rust_ident(&acc.name)).unwrap();
+        }
 
         // Signer IDs
         writeln!(out, "    let signer_ids: Vec<AccountId> = vec![").unwrap();
@@ -198,9 +224,9 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
 
         // Build instruction
         if ix.args.is_empty() {
-            writeln!(out, "    let instruction = {instr_enum}::{variant};").unwrap();
+            writeln!(out, "    let instruction = {instr_type}::{variant};").unwrap();
         } else {
-            writeln!(out, "    let instruction = {instr_enum}::{variant} {{").unwrap();
+            writeln!(out, "    let instruction = {instr_type}::{variant} {{").unwrap();
             for arg in &ix.args {
                 let name = rust_ident(&arg.name);
                 writeln!(out, "        {name},").unwrap();
@@ -209,7 +235,7 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
         }
         writeln!(out).unwrap();
 
-        // Transaction via tokio block_on
+        // Submit via tokio block_on
         writeln!(out, "    let rt = tokio::runtime::Runtime::new().map_err(|e| format!(\"tokio: {{}}\", e))?;").unwrap();
         writeln!(out, "    let tx_hash = rt.block_on(async {{").unwrap();
         writeln!(out, "        let nonces = wallet.get_accounts_nonces(signer_ids.clone()).await").unwrap();
@@ -230,13 +256,12 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
         writeln!(out, "            .map(|r| r.tx_hash.to_string())").unwrap();
         writeln!(out, "    }})?;").unwrap();
         writeln!(out).unwrap();
-
         writeln!(out, "    Ok(json!({{\"success\": true, \"tx_hash\": tx_hash}}).to_string())").unwrap();
         writeln!(out, "}}").unwrap();
         writeln!(out).unwrap();
     }
 
-    // Free + version
+    // free + version
     writeln!(out, "#[no_mangle]").unwrap();
     writeln!(out, "pub extern \"C\" fn {prefix}_free_string(s: *mut c_char) {{").unwrap();
     writeln!(out, "    if !s.is_null() {{ unsafe {{ drop(CString::from_raw(s)) }}; }}").unwrap();
