@@ -286,7 +286,8 @@ fn expand_lez_program(input: ItemMod, config: ProgramConfig) -> syn::Result<Toke
         // IDL generation (available at host-side for tooling)
         #idl_fn
 
-        // The guest binary entry point
+        // The guest binary entry point (cfg-gated so cargo test works on host)
+        #[cfg(not(test))]
         #main_fn
     };
 
