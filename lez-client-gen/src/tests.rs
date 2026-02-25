@@ -106,13 +106,14 @@ fn test_ffi_generation() {
     // AccountId parsing helper emitted in FFI
     assert!(output.ffi_code.contains("parse_account_id"));
 
-    // FFI imports the generated client module
-    assert!(output.ffi_code.contains("use super::client::*"));
+    // FFI is self-contained (inline transaction building, no super::client import)
+    assert!(!output.ffi_code.contains("use super::client::*"));
 
-    // FFI instantiates the client struct and calls methods via blocking tokio runtime
-    assert!(output.ffi_code.contains("MyMultisigClient::new"));
+    // FFI emits full WalletCore transaction building
+    assert!(output.ffi_code.contains("use wallet::WalletCore"));
     assert!(output.ffi_code.contains("tokio::runtime::Runtime::new"));
     assert!(output.ffi_code.contains("rt.block_on"));
+    assert!(output.ffi_code.contains("send_tx_public"));
 
     // FFI returns tx_hash JSON
     assert!(output.ffi_code.contains("tx_hash"));
@@ -150,14 +151,11 @@ fn test_account_order_in_client() {
 fn test_ffi_calls_client_methods() {
     let output = generate_from_idl_json(SAMPLE_IDL).expect("codegen should succeed");
 
-    // The FFI impl function should build a CreateAccounts struct and call client.create(...)
+    // The FFI impl builds instruction enum and submits transaction inline
     let ffi = &output.ffi_code;
-    assert!(ffi.contains("CreateAccounts {"), "FFI should build CreateAccounts struct");
-    assert!(ffi.contains("client.create("), "FFI should call client.create(...)");
-
-    // Same for approve
-    assert!(ffi.contains("ApproveAccounts {"), "FFI should build ApproveAccounts struct");
-    assert!(ffi.contains("client.approve("), "FFI should call client.approve(...)");
+    assert!(ffi.contains("Message::try_new"), "FFI should build Message");
+    assert!(ffi.contains("send_tx_public"), "FFI should submit transaction");
+    assert!(ffi.contains("MyMultisigInstruction"), "FFI should reference instruction enum");
 }
 
 #[test]
