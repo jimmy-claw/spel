@@ -41,6 +41,7 @@ pub async fn run() {
 
     let mut idl_path = String::new();
     let mut program_path = "program.bin".to_string();
+    let mut program_id_hex: Option<String> = None;
     let mut dry_run = false;
     let mut extra_bins: HashMap<String, String> = HashMap::new();
     let mut remaining_args: Vec<String> = vec![args[0].clone()];
@@ -55,6 +56,10 @@ pub async fn run() {
             "--program" | "-p" => {
                 i += 1;
                 if i < args.len() { program_path = args[i].clone(); }
+            }
+            "--program-id" => {
+                i += 1;
+                if i < args.len() { program_id_hex = Some(args[i].clone()); }
             }
             "--dry-run" => { dry_run = true; }
             s if s.starts_with("--bin-") => {
@@ -129,7 +134,7 @@ pub async fn run() {
             inspect_binaries(&remaining_args[2..]);
         }
         Some("pda") => {
-            compute_pda_command(&idl, &program_path, &remaining_args[2..]);
+            compute_pda_command(&idl, &program_path, program_id_hex.as_deref(), &remaining_args[2..]);
         }
         Some(cmd) => {
             let instruction = idl.instructions.iter().find(|ix| {
@@ -140,7 +145,7 @@ pub async fn run() {
                 Some(ix) => {
                     let cli_args = parse_instruction_args(&remaining_args[2..], ix);
                     execute_instruction(
-                        &idl, ix, &cli_args, &program_path, dry_run, &extra_bins,
+                        &idl, ix, &cli_args, &program_path, program_id_hex.as_deref(), dry_run, &extra_bins,
                     ).await;
                 }
                 None => {
@@ -159,7 +164,7 @@ pub async fn run() {
 ///
 /// Looks up the named account across all instructions, finds its PDA seeds,
 /// resolves them using provided args, and prints the base58 AccountId.
-fn compute_pda_command(idl: &LezIdl, program_path: &str, args: &[String]) {
+fn compute_pda_command(idl: &LezIdl, program_path: &str, program_id_hex: Option<&str>, args: &[String]) {
     let account_name = match args.first() {
         Some(n) => n.as_str(),
         None => {
@@ -222,17 +227,15 @@ fn compute_pda_command(idl: &LezIdl, program_path: &str, args: &[String]) {
         }
     }
 
-    // Get program_id: from --program-id hex arg, or by loading the binary
+    // Get program_id: from global --program-id flag, or by loading the binary
     use nssa::program::Program;
     use crate::hex::decode_bytes_32;
 
-    let program_id: nssa_core::program::ProgramId = if let Some(ParsedValue::Str(hex)) = seed_args.remove("program_id") {
-        // --program-id passed as seed arg (parsed above) — use it directly
-        let bytes = decode_bytes_32(&hex).unwrap_or_else(|e| {
+    let program_id: nssa_core::program::ProgramId = if let Some(hex) = program_id_hex {
+        let bytes = decode_bytes_32(hex).unwrap_or_else(|e| {
             eprintln!("❌ Invalid --program-id '{}': {}", hex, e);
             std::process::exit(1);
         });
-        // Convert [u8;32] to [u32;8]
         let mut pid = [0u32; 8];
         for (i, chunk) in bytes.chunks(4).enumerate() {
             pid[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);

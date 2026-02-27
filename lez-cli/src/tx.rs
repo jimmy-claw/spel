@@ -20,6 +20,7 @@ pub async fn execute_instruction(
     ix: &IdlInstruction,
     args: &HashMap<String, String>,
     program_path: &str,
+    program_id_hex: Option<&str>,
     dry_run: bool,
     extra_bins: &HashMap<String, String>,
 ) {
@@ -115,7 +116,11 @@ pub async fn execute_instruction(
     }
     println!();
     println!("🔧 Transaction:");
-    println!("  program: {}", program_path);
+    if let Some(pid) = program_id_hex {
+        println!("  program-id: {}", pid);
+    } else {
+        println!("  program: {}", program_path);
+    }
     println!("  instruction index: {}", ix_index);
     println!("  instruction: {} {{", to_pascal_case(&ix.name));
     for (name, _, val) in &parsed_args {
