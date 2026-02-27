@@ -189,6 +189,12 @@ lez-cli --idl program-idl.json --dry-run -p program.bin \
 lez-cli --idl program-idl.json -p program.bin \
   create-vault --token-name "MYTKN" --initial-supply 1000000
 
+# Use --program-id instead of binary (skips loading the file)
+lez-cli --idl program-idl.json --program-id <64-char-hex>   create-vault --token-name "MYTKN" --initial-supply 1000000
+
+# Compute a PDA from the IDL
+lez-cli --idl program-idl.json --program-id <64-char-hex> pda vault --create-key my-multisig
+
 # Auto-fill program IDs from binaries
 lez-cli --idl program-idl.json -p treasury.bin --bin-token token.bin \
   create-vault --token-name "MYTKN" --initial-supply 1000000
@@ -204,7 +210,10 @@ lez-cli --idl program-idl.json create-vault --help
 | `u8`, `u32`, `u64`, `u128` | Decimal number |
 | `[u8; N]` | Hex string (2×N chars) or UTF-8 string (≤N chars, right-padded) |
 | `[u32; 8]` / `program_id` | Comma-separated u32s: `"0,0,0,0,0,0,0,0"` |
+| `Vec<u8>` | Comma-separated decimal bytes: `"0,1,2"` |
+| `Vec<u32>` | Comma-separated decimal u32s: `"0,200,0,0,0"` |
 | `Vec<[u8; 32]>` | Comma-separated hex or base58: `"addr1,addr2"` |
+| `rest` accounts | Comma-separated base58/hex: `--foo-account "addr1,addr2"` |
 | `Option<T>` | Value or `"none"` |
 | Account IDs | Base58 or 64-char hex |
 
@@ -216,6 +225,7 @@ lez-cli --idl program-idl.json create-vault --help
 | `lez-framework-core` | IDL types, error types, `LezOutput` |
 | `lez-framework-macros` | Proc macros: `#[lez_program]`, `#[instruction]`, `generate_idl!` |
 | `lez-cli` | Generic IDL-driven CLI with TX submission + project scaffolding |
+| `lez-client-gen` | Code generator — produces typed Rust FFI clients from IDL JSON |
 
 ## License
 
