@@ -89,10 +89,13 @@ pub async fn run() {
                 inspect_binaries(&remaining_args[2..]);
                 return;
             }
-            "pda" if remaining_args.get(2).map(|s| s == "--program-id").unwrap_or(false) => {
+            "pda" if program_id_hex.is_some() && remaining_args.get(2).map(|s| !s.starts_with("--")).unwrap_or(false) => {
                 // Raw PDA mode: no IDL needed
-                // Usage: pda --program-id <hex> <seed1> [seed2] ...
-                compute_pda_raw(&remaining_args[2..]);
+                // Triggered when --program-id <hex> is passed as a global flag + pda command
+                // Usage: <bin> --program-id <hex> pda <seed1> [seed2] ...
+                let mut raw_args = vec!["--program-id".to_string(), program_id_hex.clone().unwrap()];
+                raw_args.extend_from_slice(&remaining_args[2..]);
+                compute_pda_raw(&raw_args);
                 return;
             }
             _ => {}
