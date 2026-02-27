@@ -9,7 +9,7 @@ use crate::parse::ParsedValue;
 /// Resolve a single seed to 32 bytes.
 fn resolve_seed(
     seed: &IdlSeed,
-    program_id: &ProgramId,
+    _program_id: &ProgramId,
     account_map: &HashMap<String, AccountId>,
     parsed_args: &HashMap<String, ParsedValue>,
 ) -> Result<[u8; 32], String> {

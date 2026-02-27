@@ -6,6 +6,7 @@ use std::process;
 use nssa::program::Program;
 use nssa::public_transaction::{Message, WitnessSet};
 use nssa::{AccountId, PublicTransaction};
+use nssa_core::program::ProgramId;
 use lez_framework_core::idl::{IdlSeed, LezIdl, IdlInstruction};
 use crate::hex::{hex_encode, decode_bytes_32};
 use crate::parse::{parse_value, ParsedValue};
@@ -20,6 +21,7 @@ pub async fn execute_instruction(
     ix: &IdlInstruction,
     args: &HashMap<String, String>,
     program_path: &str,
+    program_id_hex: Option<&str>,
     dry_run: bool,
     extra_bins: &HashMap<String, String>,
 ) {
@@ -115,7 +117,11 @@ pub async fn execute_instruction(
     }
     println!();
     println!("🔧 Transaction:");
-    println!("  program: {}", program_path);
+    if let Some(pid) = program_id_hex {
+        println!("  program-id: {}", pid);
+    } else {
+        println!("  program: {}", program_path);
+    }
     println!("  instruction index: {}", ix_index);
     println!("  instruction: {} {{", to_pascal_case(&ix.name));
     for (name, _, val) in &parsed_args {
@@ -136,15 +142,29 @@ pub async fn execute_instruction(
     // ─── Transaction submission ──────────────────────────────────
     println!("📤 Submitting transaction...");
 
-    let program_bytecode = fs::read(program_path).unwrap_or_else(|e| {
-        eprintln!("❌ Failed to read program binary '{}': {}", program_path, e);
-        process::exit(1);
-    });
-    let program = Program::new(program_bytecode).unwrap_or_else(|e| {
-        eprintln!("❌ Failed to load program: {:?}", e);
-        process::exit(1);
-    });
-    let program_id = program.id();
+    // Resolve program_id: from --program-id hex flag, or by loading the binary
+    use crate::hex::decode_bytes_32;
+    let program_id: ProgramId = if let Some(hex) = program_id_hex {
+        let bytes = decode_bytes_32(hex).unwrap_or_else(|e| {
+            eprintln!("❌ Invalid --program-id '{}': {}", hex, e);
+            process::exit(1);
+        });
+        let mut pid = [0u32; 8];
+        for (i, chunk) in bytes.chunks(4).enumerate() {
+            pid[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        pid
+    } else {
+        let program_bytecode = fs::read(program_path).unwrap_or_else(|e| {
+            eprintln!("❌ Failed to read program binary '{}': {}", program_path, e);
+            eprintln!("   Hint: pass --program-id <hex> to skip loading the binary");
+            process::exit(1);
+        });
+        Program::new(program_bytecode).unwrap_or_else(|e| {
+            eprintln!("❌ Failed to load program: {:?}", e);
+            process::exit(1);
+        }).id()
+    };
     println!("  Program ID: {:?}", program_id);
 
     // Build account map for PDA resolution
