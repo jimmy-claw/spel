@@ -89,6 +89,12 @@ pub async fn run() {
                 inspect_binaries(&remaining_args[2..]);
                 return;
             }
+            "pda" if remaining_args.get(2).map(|s| s == "--program-id").unwrap_or(false) => {
+                // Raw PDA mode: no IDL needed
+                // Usage: pda --program-id <hex> <seed1> [seed2] ...
+                compute_pda_raw(&remaining_args[2..]);
+                return;
+            }
             _ => {}
         }
     }
@@ -101,6 +107,7 @@ pub async fn run() {
         eprintln!("  inspect <FILE> [FILE...]  Print ProgramId for ELF binary(ies)");
         eprintln!();
         eprintln!("  pda <ACCOUNT> [--seed-arg VALUE...]  Compute a PDA defined in the IDL");
+        eprintln!("  pda --program-id <HEX> <SEED> [SEED...]  Compute arbitrary PDA (no IDL needed)");
         eprintln!("For all other commands, provide an IDL JSON file.");
         process::exit(1);
     }
@@ -276,4 +283,87 @@ fn compute_pda_command(idl: &LezIdl, program_path: &str, program_id_hex: Option<
             std::process::exit(1);
         }
     }
+}
+
+/// Compute an arbitrary PDA from a program ID and raw seeds — no IDL required.
+///
+/// Usage: pda --program-id <64-char-hex> <seed1> [seed2] ...
+///
+/// Seeds can be:
+///   - hex string (64 chars = 32 bytes)
+///   - plain string (zero-padded to 32 bytes)
+///
+/// Output: base58 AccountId = SHA-256(PREFIX || program_id || SHA-256(seed1_32 || seed2_32 || ...))
+///
+/// Example:
+///   multisig --program-id abc123... pda multisig_vault__ <create_key_hex>
+fn compute_pda_raw(args: &[String]) {
+    use crate::hex::decode_bytes_32;
+    use nssa_core::program::{PdaSeed, ProgramId};
+    use nssa::AccountId;
+
+    // Parse --program-id
+    let pid_hex = match args.windows(2).find(|w| w[0] == "--program-id") {
+        Some(w) => &w[1],
+        None => {
+            eprintln!("Usage: pda --program-id <64-char-hex> <seed1> [seed2] ...");
+            std::process::exit(1);
+        }
+    };
+
+    let pid_bytes = decode_bytes_32(pid_hex).unwrap_or_else(|e| {
+        eprintln!("❌ Invalid --program-id '{}': {}", pid_hex, e);
+        std::process::exit(1);
+    });
+    let mut program_id: ProgramId = [0u32; 8];
+    for (i, chunk) in pid_bytes.chunks(4).enumerate() {
+        program_id[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+
+    // Collect seed args (everything that's not --program-id or its value)
+    let mut seeds: Vec<[u8; 32]> = Vec::new();
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next { skip_next = false; continue; }
+        if arg == "--program-id" { skip_next = true; continue; }
+        if arg.starts_with("--") { continue; }
+
+        // Try as 64-char hex first, then as zero-padded string
+        let seed_bytes: [u8; 32] = if arg.len() == 64 && arg.chars().all(|c| c.is_ascii_hexdigit()) {
+            decode_bytes_32(arg).unwrap_or_else(|e| {
+                eprintln!("❌ Invalid hex seed '{}': {}", arg, e);
+                std::process::exit(1);
+            })
+        } else {
+            let mut bytes = [0u8; 32];
+            let src = arg.as_bytes();
+            if src.len() > 32 {
+                eprintln!("❌ Seed '{}' is {} bytes, max 32", arg, src.len());
+                std::process::exit(1);
+            }
+            bytes[..src.len()].copy_from_slice(src);
+            bytes
+        };
+        seeds.push(seed_bytes);
+    }
+
+    if seeds.is_empty() {
+        eprintln!("❌ At least one seed required");
+        eprintln!("Usage: pda --program-id <hex> <seed1> [seed2] ...");
+        std::process::exit(1);
+    }
+
+    // Combine seeds via SHA-256(seed1 || seed2 || ...)
+    use risc0_zkvm::sha::{Impl, Sha256};
+    let combined: [u8; 32] = if seeds.len() == 1 {
+        seeds[0]
+    } else {
+        let mut input = Vec::with_capacity(seeds.len() * 32);
+        for s in &seeds { input.extend_from_slice(s); }
+        Impl::hash_bytes(&input).as_bytes().try_into().expect("SHA-256 is 32 bytes")
+    };
+
+    let pda_seed = PdaSeed::new(combined);
+    let account_id = AccountId::from((&program_id, &pda_seed));
+    println!("{}", account_id);
 }
