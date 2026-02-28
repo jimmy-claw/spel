@@ -1,8 +1,8 @@
-# SPEL — Smart Program Execution Layer
+# SPEL — Smart Program Engine for Logos
 
 [![CI](https://github.com/jimmy-claw/spel/actions/workflows/ci.yml/badge.svg)](https://github.com/jimmy-claw/spel/actions/workflows/ci.yml)
 
-> **SPEL** = **S**mart **P**rogram **E**xecution **L**ayer
+> **SPEL** = **S**mart **P**rogram **E**ngine for **L**ogos
 >
 > The name captures what this is: a framework layer that makes writing smart programs for the Logos Execution Zone (LEZ) feel like writing normal Rust — with macros handling the boilerplate, a CLI doing the heavy lifting, and zkVM proving the execution.
 
