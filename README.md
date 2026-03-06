@@ -1,6 +1,6 @@
 # SPEL — Smart Program Engine for Logos
 
-[![CI](https://github.com/jimmy-claw/spel/actions/workflows/ci.yml/badge.svg)](https://github.com/jimmy-claw/spel/actions/workflows/ci.yml)
+[![CI](https://github.com/logos-co/spel/actions/workflows/ci.yml/badge.svg)](https://github.com/logos-co/spel/actions/workflows/ci.yml)
 
 > **SPEL** = **S**mart **P**rogram **E**ngine for **L**ogos
 >
@@ -71,11 +71,11 @@ The macro emits the IDL. The CLI reads the IDL. You write logic.
 
 | Repo | Description |
 |------|-------------|
-| [spel](https://github.com/jimmy-claw/spel) | This repo — framework, macros, CLI |
-| [spelbook](https://github.com/jimmy-claw/spelbook) | On-chain program registry (SPELbook) |
-| [lez-multisig-framework](https://github.com/jimmy-claw/lez-multisig-framework) | Multisig governance program — full demo |
+| [spel](https://github.com/logos-co/spel) | This repo — framework, macros, CLI |
+| [spelbook](https://github.com/logos-co/spelbook) | On-chain program registry (SPELbook) |
+| [lez-multisig-framework](https://github.com/logos-co/lez-multisig-framework) | Multisig governance program — full demo |
 | [lmao](https://github.com/jimmy-claw/lmao) | Logos Module for Agent Orchestration (A2A over Waku) |
 
 ## v0.1.0
 
-Tagged [v0.1.0](https://github.com/jimmy-claw/spel/releases/tag/v0.1.0) — full end-to-end demo passing with lez-multisig-framework (deploy → registry → multisig governance → token ChainedCall).
+Tagged [v0.1.0](https://github.com/logos-co/spel/releases/tag/v0.1.0) — full end-to-end demo passing with lez-multisig-framework (deploy → registry → multisig governance → token ChainedCall).
