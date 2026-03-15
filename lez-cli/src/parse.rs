@@ -107,7 +107,7 @@ fn parse_program_id(raw: &str) -> Result<ParsedValue, String> {
         let bytes = hex_decode(raw)?;
         let mut vals = Vec::with_capacity(8);
         for chunk in bytes.chunks(4) {
-            vals.push(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            vals.push(u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
         }
         Ok(ParsedValue::U32Array(vals))
     } else {
