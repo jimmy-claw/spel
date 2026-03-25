@@ -112,57 +112,6 @@ pub fn private_only_instruction(...) -> LezResult
 
 This is informational — it signals to tooling that this instruction expects private accounts. The program logic remains the same.
 
-## ZK-Aware Instructions: #[pre_tx_hook]
-
-Some instructions need client-side ZK proof generation before the transaction is submitted — for example, proving you are a member of a multisig without revealing your identity.
-
-SPEL's `#[pre_tx_hook]` attribute automates this pattern:
-
-```rust
-#[lez_program]
-mod multisig {
-    #[instruction]
-    #[pre_tx_hook(signer = caller, method = vote_prove, outputs = [receipt, nullifier])]
-    pub fn propose(ctx: Context, proposal_index: u64, ...) -> LezResult {
-        // env::verify(receipt)?; — auto-injected by macro
-        // custom logic only
-    }
-}
-```
-
-**What the macro does:**
-
-1. Generates a `PreTxInput` struct with all instruction args + the caller's account ID
-2. Adds `pre_tx` metadata to the IDL for this instruction
-3. Auto-injects `env::verify(receipt)?;` as the first line of the function body
-
-**What the CLI does:**
-
-When `spel-cli` sees `pre_tx` in the IDL for an instruction:
-1. Reads `--caller Private/xxx` from CLI args
-2. Looks up the caller's NSK from the wallet keystore (no manual NSK entry needed)
-3. Runs `vote_prove(PreTxInput { ... })` to generate the ZK receipt
-4. Attaches `receipt` and `nullifier` to the transaction
-
-**Developer experience:** Write only the business logic. SPEL handles NSK lookup, proof generation, and `env::verify()` automatically.
-
-**Usage:**
-
-```bash
-# Create private accounts for each member
-wallet account new private  # Alice
-wallet account new private  # Bob
-wallet account new private  # Carol
-
-# Use --caller to specify voter identity (NSK never exposed)
-spel --idl multisig.json propose \
-  --caller Private/Alice_id \
-  --multisig 3HLvtc4k... \
-  --proposal-index 1
-```
-
-See [SPEL issue #85](https://github.com/logos-co/spel/issues/85) for full design details.
-
 ## Related
 
 - [LEZ Privacy Technical Deep Dive](lez/lez-privacy-technical-deep-dive.md)
