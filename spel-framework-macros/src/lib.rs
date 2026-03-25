@@ -771,7 +771,7 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
                 .enumerate()
                 .filter(|(_, acc)| acc.constraints.signer)
                 .map(|(i, acc)| {
-                    let _acc_name = acc.name.to_string();
+                    let acc_name = acc.name.to_string();
                     let idx = i;
                     quote! {
                         if !accounts[#idx].is_authorized {
@@ -790,7 +790,7 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
                 .enumerate()
                 .filter(|(_, acc)| acc.constraints.init)
                 .map(|(i, acc)| {
-                    let _acc_name = acc.name.to_string();
+                    let acc_name = acc.name.to_string();
                     let idx = i;
                     quote! {
                         if accounts[#idx].account != nssa_core::account::Account::default() {
