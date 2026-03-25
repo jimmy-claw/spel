@@ -58,17 +58,42 @@ pub struct IdlExecution {
 
 /// An instruction in the IDL.
 
+/// Source of a pre_tx input value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum IdlPreTxInputSource {
+    /// NSK resolved from the wallet keystore for the caller account.
+    WalletNsk,
+    /// Value taken from instruction arg with this name.
+    Arg { name: String },
+    /// Hard-coded string literal.
+    Literal { value: String },
+}
+
+/// One input to the pre_tx guest ELF.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlPreTxInput {
+    /// Field name in the guest input struct.
+    pub name: String,
+    /// Borsh-serializable type tag (bytes32, u64, string, vec_bytes32, ...).
+    pub type_: String,
+    /// Where to get the value from.
+    pub source: IdlPreTxInputSource,
+}
+
 /// Pre-transaction hook for ZK proof generation.
 ///
-/// Indicates that the client should call a method before submitting
-/// the transaction, and attach the resulting outputs as extra data.
+/// spel-cli executes the guest ELF directly via risc0_zkvm,
+/// serializes inputs from the IDL schema, reads journal outputs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdlPreTxHook {
-    /// Which instruction argument provides the caller's account (e.g. caller).
+    /// Which CLI arg holds the caller's Private/xxx account (NSK resolved from wallet).
     pub signer_arg: String,
-    /// The method name to call (e.g. vote_prove).
-    pub method: String,
-    /// Output field names returned by the method (e.g. [receipt, nullifier]).
+    /// Path to the guest ELF binary (relative to program binary, or env SPEL_GUEST_ELF).
+    pub elf: String,
+    /// Ordered inputs to serialize and pass to the guest.
+    pub inputs: Vec<IdlPreTxInput>,
+    /// Output field names to extract from the journal (e.g. [receipt, nullifier]).
     pub outputs: Vec<String>,
 }
 

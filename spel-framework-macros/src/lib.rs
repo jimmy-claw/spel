@@ -163,13 +163,24 @@ enum PdaSeedDef {
     Arg(String),
 }
 
+/// One input to the pre_tx guest ELF.
+#[derive(Clone)]
+struct PreTxInput {
+    name: String,
+    type_: String,
+    source: String, // "wallet_nsk", "arg:name", or "literal:value"
+}
+
 /// Pre-transaction hook specification parsed from #[pre_tx_hook(...)].
+#[derive(Clone)]
 struct PreTxHook {
     /// Which instruction argument is the caller's account (e.g. "caller").
     signer_arg: String,
-    /// The method name to call (e.g. "vote_prove").
-    method: String,
-    /// Output field names returned by the method (e.g. ["receipt", "nullifier"]).
+    /// Path to the guest ELF binary.
+    elf: String,
+    /// Ordered inputs to the guest ELF.
+    inputs: Vec<PreTxInput>,
+    /// Output field names from the journal (e.g. ["receipt", "nullifier"]).
     outputs: Vec<String>,
 }
 
@@ -378,7 +389,8 @@ fn extract_pre_tx_hook(attrs: &[Attribute]) -> syn::Result<Option<PreTxHook>> {
 fn parse_pre_tx_hook_attr(attr: &Attribute) -> syn::Result<Option<PreTxHook>> {
     let meta = &attr.meta;
     let mut signer_arg = None;
-    let mut method = None;
+    let mut elf = None;
+    let mut inputs: Vec<PreTxInput> = Vec::new();
     let mut outputs = Vec::new();
 
     match meta {
@@ -396,27 +408,59 @@ fn parse_pre_tx_hook_attr(attr: &Attribute) -> syn::Result<Option<PreTxHook>> {
                                 if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value {
                                     signer_arg = Some(s.value());
                                 } else {
-                                    return Err(syn::Error::new_spanned(&nv.value, "signer must be a string literal (e.g. caller)"));
+                                    return Err(syn::Error::new_spanned(&nv.value, "signer must be an identifier (e.g. caller)"));
                                 }
                             }
-                            "method" => {
+                            "elf" => {
                                 if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value {
-                                    method = Some(s.value());
+                                    elf = Some(s.value());
                                 } else {
-                                    return Err(syn::Error::new_spanned(&nv.value, "method must be a string literal"));
+                                    return Err(syn::Error::new_spanned(&nv.value, "elf must be a string literal path"));
+                                }
+                            }
+                            "inputs" => {
+                                // inputs = [(name, type, source), ...]
+                                if let syn::Expr::Array(arr) = &nv.value {
+                                    for elem in &arr.elems {
+                                        if let syn::Expr::Tuple(tup) = elem {
+                                            if tup.elems.len() != 3 {
+                                                return Err(syn::Error::new_spanned(elem, "each input must be (name, type, source)"));
+                                            }
+                                            let name = match &tup.elems[0] {
+                                                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
+                                                syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()).unwrap_or_default(),
+                                                other => return Err(syn::Error::new_spanned(other, "input name must be an identifier or string")),
+                                            };
+                                            let type_ = match &tup.elems[1] {
+                                                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
+                                                syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()).unwrap_or_default(),
+                                                other => return Err(syn::Error::new_spanned(other, "input type must be an identifier or string")),
+                                            };
+                                            let source = match &tup.elems[2] {
+                                                syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => s.value(),
+                                                syn::Expr::Path(p) => p.path.get_ident().map(|i| i.to_string()).unwrap_or_default(),
+                                                other => return Err(syn::Error::new_spanned(other, "input source must be a string (wallet_nsk, arg:name, literal:value)")),
+                                            };
+                                            inputs.push(PreTxInput { name, type_, source });
+                                        } else {
+                                            return Err(syn::Error::new_spanned(elem, "each input must be a tuple (name, type, source)"));
+                                        }
+                                    }
+                                } else {
+                                    return Err(syn::Error::new_spanned(&nv.value, "inputs must be an array [(name, type, source), ...]"));
                                 }
                             }
                             "outputs" => {
                                 if let syn::Expr::Array(arr) = &nv.value {
                                     for elem in &arr.elems {
-                                        if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = elem {
-                                            outputs.push(s.value());
-                                        } else {
-                                            return Err(syn::Error::new_spanned(elem, "outputs must be string literals in brackets"));
+                                        match elem {
+                                            syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => outputs.push(s.value()),
+                                            syn::Expr::Path(p) => outputs.push(p.path.get_ident().map(|i| i.to_string()).unwrap_or_default()),
+                                            other => return Err(syn::Error::new_spanned(other, "outputs must be identifiers or string literals")),
                                         }
                                     }
                                 } else {
-                                    return Err(syn::Error::new_spanned(&nv.value, "outputs must be an array literal [field1, field2]"));
+                                    return Err(syn::Error::new_spanned(&nv.value, "outputs must be an array [field1, field2]"));
                                 }
                             }
                             _ => {
@@ -425,7 +469,7 @@ fn parse_pre_tx_hook_attr(attr: &Attribute) -> syn::Result<Option<PreTxHook>> {
                         }
                     }
                     _ => {
-                        return Err(syn::Error::new_spanned(meta, "expected signer = ..., method = ..., or outputs = [...]"));
+                        return Err(syn::Error::new_spanned(meta, "expected signer = ..., elf = ..., inputs = [...], or outputs = [...]"));
                     }
                 }
             }
@@ -436,12 +480,12 @@ fn parse_pre_tx_hook_attr(attr: &Attribute) -> syn::Result<Option<PreTxHook>> {
     }
 
     let signer_arg = signer_arg.ok_or_else(|| syn::Error::new_spanned(meta, "pre_tx_hook requires signer = ..."))?;
-    let method = method.ok_or_else(|| syn::Error::new_spanned(meta, "pre_tx_hook requires method = ..."))?;
+    let elf = elf.ok_or_else(|| syn::Error::new_spanned(meta, r#"pre_tx_hook requires elf = path/to/guest.bin"#))?;
     if outputs.is_empty() {
         return Err(syn::Error::new_spanned(meta, "pre_tx_hook requires outputs = [field1, field2]"));
     }
 
-    Ok(Some(PreTxHook { signer_arg, method, outputs }))
+    Ok(Some(PreTxHook { signer_arg, elf, inputs, outputs }))
 }
 
 fn extract_param_name(pat_type: &PatType) -> syn::Result<Ident> {
@@ -1020,14 +1064,38 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo], external_
             // Pre-tx hook IDL literal
             let pre_tx_literal: TokenStream2 = if let Some(hook) = &ix.pre_tx_hook {
                 let signer_arg = &hook.signer_arg;
-                let method = &hook.method;
+                let elf = &hook.elf;
                 let outputs_lit: Vec<TokenStream2> = hook.outputs.iter()
                     .map(|o| quote! { #o.to_string() })
                     .collect();
+                let inputs_lit: Vec<TokenStream2> = hook.inputs.iter()
+                    .map(|inp| {
+                        let name = &inp.name;
+                        let type_ = &inp.type_;
+                        let source = &inp.source;
+                        let source_lit = if source == "wallet_nsk" {
+                            quote! { spel_framework_core::idl::IdlPreTxInputSource::WalletNsk }
+                        } else if let Some(arg_name) = source.strip_prefix("arg:") {
+                            quote! { spel_framework_core::idl::IdlPreTxInputSource::Arg { name: #arg_name.to_string() } }
+                        } else if let Some(val) = source.strip_prefix("literal:") {
+                            quote! { spel_framework_core::idl::IdlPreTxInputSource::Literal { value: #val.to_string() } }
+                        } else {
+                            quote! { spel_framework_core::idl::IdlPreTxInputSource::Arg { name: #source.to_string() } }
+                        };
+                        quote! {
+                            spel_framework_core::idl::IdlPreTxInput {
+                                name: #name.to_string(),
+                                type_: #type_.to_string(),
+                                source: #source_lit,
+                            }
+                        }
+                    })
+                    .collect();
                 quote! {
-                    Some(spel_framework::idl::IdlPreTxHook {
+                    Some(spel_framework_core::idl::IdlPreTxHook {
                         signer_arg: #signer_arg.to_string(),
-                        method: #method.to_string(),
+                        elf: #elf.to_string(),
+                        inputs: vec![#(#inputs_lit),*],
                         outputs: vec![#(#outputs_lit),*],
                     })
                 }
@@ -1146,8 +1214,8 @@ fn generate_idl_json(mod_name: &Ident, instructions: &[InstructionInfo], externa
                     .collect();
                 let outputs_join = outputs_strs.join(",");
                 format!(
-                    "{{\"signer_arg\":\"{}\",\"method\":\"{}\",\"outputs\":[{}]}}",
-                    hook.signer_arg, hook.method, outputs_join
+                    "{{\"signer_arg\":\"{}\",\"elf\":\"{}\",\"outputs\":[{}]}}",
+                    hook.signer_arg, hook.elf, outputs_join
                 )
             } else {
                 String::new()
