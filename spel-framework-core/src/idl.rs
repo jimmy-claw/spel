@@ -57,6 +57,21 @@ pub struct IdlExecution {
 }
 
 /// An instruction in the IDL.
+
+/// Pre-transaction hook for ZK proof generation.
+///
+/// Indicates that the client should call a method before submitting
+/// the transaction, and attach the resulting outputs as extra data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlPreTxHook {
+    /// Which instruction argument provides the caller's account (e.g. caller).
+    pub signer_arg: String,
+    /// The method name to call (e.g. vote_prove).
+    pub method: String,
+    /// Output field names returned by the method (e.g. [receipt, nullifier]).
+    pub outputs: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdlInstruction {
     pub name: String,
@@ -71,6 +86,9 @@ pub struct IdlInstruction {
     /// Variant name in PascalCase (lssa-lang compat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
+    /// Pre-transaction hook for ZK proof generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_tx: Option<IdlPreTxHook>,
 }
 
 /// An account expected by an instruction.

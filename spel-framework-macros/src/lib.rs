@@ -130,6 +130,8 @@ struct InstructionInfo {
     accounts: Vec<AccountParam>,
     /// Non-account parameters (the instruction args)
     args: Vec<ArgParam>,
+    /// Pre-transaction hook, if any
+    pre_tx_hook: Option<PreTxHook>,
     /// The original function item (with #[instruction] stripped)
     func: ItemFn,
 }
@@ -159,6 +161,16 @@ enum PdaSeedDef {
     Account(String),
     /// `arg("some_arg")` — seed derived from an instruction argument
     Arg(String),
+}
+
+/// Pre-transaction hook specification parsed from #[pre_tx_hook(...)].
+struct PreTxHook {
+    /// Which instruction argument is the caller's account (e.g. "caller").
+    signer_arg: String,
+    /// The method name to call (e.g. "vote_prove").
+    method: String,
+    /// Output field names returned by the method (e.g. ["receipt", "nullifier"]).
+    outputs: Vec<String>,
 }
 
 struct ArgParam {
@@ -343,12 +355,93 @@ fn parse_instruction(func: ItemFn) -> syn::Result<InstructionInfo> {
         }
     }
 
+    let pre_tx_hook = extract_pre_tx_hook(&func.attrs)?;
+
     Ok(InstructionInfo {
         fn_name,
         accounts,
         args,
+        pre_tx_hook,
         func,
     })
+}
+
+fn extract_pre_tx_hook(attrs: &[Attribute]) -> syn::Result<Option<PreTxHook>> {
+    for attr in attrs {
+        if attr.path().is_ident("pre_tx_hook") {
+            return parse_pre_tx_hook_attr(attr);
+        }
+    }
+    Ok(None)
+}
+
+fn parse_pre_tx_hook_attr(attr: &Attribute) -> syn::Result<Option<PreTxHook>> {
+    let meta = &attr.meta;
+    let mut signer_arg = None;
+    let mut method = None;
+    let mut outputs = Vec::new();
+
+    match meta {
+        syn::Meta::List(list) => {
+            let parser = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
+            let metas = parser.parse_str(&list.tokens.to_string())?;
+            for meta in metas {
+                match meta {
+                    syn::Meta::NameValue(nv) => {
+                        let name = nv.path.get_ident()
+                            .map(|i| i.to_string())
+                            .unwrap_or_default();
+                        match name.as_str() {
+                            "signer" => {
+                                if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value {
+                                    signer_arg = Some(s.value());
+                                } else {
+                                    return Err(syn::Error::new_spanned(&nv.value, "signer must be a string literal (e.g. caller)"));
+                                }
+                            }
+                            "method" => {
+                                if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value {
+                                    method = Some(s.value());
+                                } else {
+                                    return Err(syn::Error::new_spanned(&nv.value, "method must be a string literal"));
+                                }
+                            }
+                            "outputs" => {
+                                if let syn::Expr::Array(arr) = &nv.value {
+                                    for elem in &arr.elems {
+                                        if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = elem {
+                                            outputs.push(s.value());
+                                        } else {
+                                            return Err(syn::Error::new_spanned(elem, "outputs must be string literals in brackets"));
+                                        }
+                                    }
+                                } else {
+                                    return Err(syn::Error::new_spanned(&nv.value, "outputs must be an array literal [field1, field2]"));
+                                }
+                            }
+                            _ => {
+                                return Err(syn::Error::new_spanned(&nv.path, &format!("unknown pre_tx_hook parameter: {}", name)));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(meta, "expected signer = ..., method = ..., or outputs = [...]"));
+                    }
+                }
+            }
+        }
+        _ => {
+            return Err(syn::Error::new_spanned(meta, "pre_tx_hook(...) requires parentheses"));
+        }
+    }
+
+    let signer_arg = signer_arg.ok_or_else(|| syn::Error::new_spanned(meta, "pre_tx_hook requires signer = ..."))?;
+    let method = method.ok_or_else(|| syn::Error::new_spanned(meta, "pre_tx_hook requires method = ..."))?;
+    if outputs.is_empty() {
+        return Err(syn::Error::new_spanned(meta, "pre_tx_hook requires outputs = [field1, field2]"));
+    }
+
+    Ok(Some(PreTxHook { signer_arg, method, outputs }))
 }
 
 fn extract_param_name(pat_type: &PatType) -> syn::Result<Ident> {
@@ -624,9 +717,22 @@ fn generate_match_arms(mod_name: &Ident, instructions: &[InstructionInfo]) -> Ve
                 quote! {}
             };
 
+            // Pre-tx hook: auto-inject env::verify(self.{first_output})?; as first line
+            let pre_tx_verify = if let Some(hook) = &ix.pre_tx_hook {
+                let first_output = hook.outputs.first()
+                    .map(|o| format_ident!("{}", o))
+                    .unwrap_or_else(|| format_ident!("receipt"));
+                quote! {
+                    nssa_core::program::env::verify(self.#first_output).expect("pre-tx hook verification failed");
+                }
+            } else {
+                quote! {}
+            };
+
             quote! {
                 #pattern => {
                     #account_destructure
+                    #pre_tx_verify
                     #validation_call
                     #mod_name::#fn_name(#(#call_args),*)
                         .map(|output| (output.post_states, output.chained_calls))
@@ -665,7 +771,7 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
                 .enumerate()
                 .filter(|(_, acc)| acc.constraints.signer)
                 .map(|(i, acc)| {
-                    let acc_name = acc.name.to_string();
+                    let _acc_name = acc.name.to_string();
                     let idx = i;
                     quote! {
                         if !accounts[#idx].is_authorized {
@@ -684,7 +790,7 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
                 .enumerate()
                 .filter(|(_, acc)| acc.constraints.init)
                 .map(|(i, acc)| {
-                    let acc_name = acc.name.to_string();
+                    let _acc_name = acc.name.to_string();
                     let idx = i;
                     quote! {
                         if accounts[#idx].account != nssa_core::account::Account::default() {
@@ -909,6 +1015,24 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo], external_
                     .collect::<String>()
             };
 
+            // Pre-tx hook IDL literal
+            let pre_tx_literal: TokenStream2 = if let Some(hook) = &ix.pre_tx_hook {
+                let signer_arg = &hook.signer_arg;
+                let method = &hook.method;
+                let outputs_lit: Vec<TokenStream2> = hook.outputs.iter()
+                    .map(|o| quote! { #o.to_string() })
+                    .collect();
+                quote! {
+                    Some(spel_framework::idl::IdlPreTxHook {
+                        signer_arg: #signer_arg.to_string(),
+                        method: #method.to_string(),
+                        outputs: vec![#(#outputs_lit),*],
+                    })
+                }
+            } else {
+                quote! { None }
+            };
+
             quote! {
                 spel_framework::idl::IdlInstruction {
                     name: #ix_name.to_string(),
@@ -920,6 +1044,7 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo], external_
                         private_owned: false,
                     }),
                     variant: Some(#variant_name_str.to_string()),
+                    pre_tx: #pre_tx_literal,
                 }
             }
         })
@@ -1012,11 +1137,31 @@ fn generate_idl_json(mod_name: &Ident, instructions: &[InstructionInfo], externa
                 })
                 .collect();
 
+            // Pre-tx hook JSON
+            let pre_tx_json = if let Some(hook) = &ix.pre_tx_hook {
+                let outputs_strs: Vec<String> = hook.outputs.iter()
+                    .map(|o| format!("\"{}\"", o))
+                    .collect();
+                let outputs_join = outputs_strs.join(",");
+                format!(
+                    "{{\"signer_arg\":\"{}\",\"method\":\"{}\",\"outputs\":[{}]}}",
+                    hook.signer_arg, hook.method, outputs_join
+                )
+            } else {
+                String::new()
+            };
+            let pre_tx_field = if pre_tx_json.is_empty() {
+                String::new()
+            } else {
+                format!(",\"pre_tx\":{}", pre_tx_json)
+            };
+
             format!(
-                "{{\"name\":\"{}\",\"accounts\":[{}],\"args\":[{}]}}",
+                "{{\"name\":\"{}\",\"accounts\":[{}],\"args\":[{}]{}}}",
                 ix_name,
                 accounts_json.join(","),
-                args_json.join(",")
+                args_json.join(","),
+                pre_tx_field
             )
         })
         .collect();
