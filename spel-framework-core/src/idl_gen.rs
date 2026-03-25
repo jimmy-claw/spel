@@ -175,7 +175,6 @@ fn generate_idl_from_str(content: &str, source_label: &str) -> Result<SpelIdl, I
                 discriminator: None,
                 execution: None,
                 variant: None,
-                pre_tx: None,
             }
         })
         .collect();

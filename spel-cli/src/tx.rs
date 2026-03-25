@@ -14,106 +14,6 @@ use crate::serialize::serialize_to_risc0;
 use crate::pda::compute_pda_from_seeds;
 use crate::cli::{snake_to_kebab, to_pascal_case};
 use wallet::WalletCore;
-use nssa_core::NullifierSecretKey;
-
-
-/// Execute a pre_tx hook: resolve NSK from wallet, call external prover binary,
-/// return (receipt_hex, nullifier_hex) to inject into instruction args.
-fn run_pre_tx_hook(
-    hook: &spel_framework_core::idl::IdlPreTxHook,
-    args: &std::collections::HashMap<String, String>,
-    wallet_core: &WalletCore,
-) -> std::collections::HashMap<String, String> {
-    use std::io::Write;
-
-    // Resolve caller account
-    let caller_key = crate::cli::snake_to_kebab(&hook.signer_arg);
-    let caller_str = args.get(&caller_key).unwrap_or_else(|| {
-        eprintln!("❌ pre_tx hook requires --{} (caller account)", caller_key);
-        process::exit(1);
-    });
-
-    // Strip Private/ prefix and resolve NSK
-    let id_str = caller_str.trim_start_matches("Private/");
-    let account_id: nssa::AccountId = id_str.parse().unwrap_or_else(|e| {
-        eprintln!("❌ Invalid account ID '{}': {}", caller_str, e);
-        process::exit(1);
-    });
-    let nsk: NullifierSecretKey = wallet_core
-        .get_account_nullifier_secret_key(account_id)
-        .unwrap_or_else(|| {
-            eprintln!("❌ Account '{}' not found in wallet keystore", caller_str);
-            process::exit(1);
-        });
-    let nsk_hex = hex_encode(&nsk);
-
-    // Find pre-tx binary: SPEL_PRE_TX_BIN env var or --pre-tx-bin arg
-    let bin_path = std::env::var("SPEL_PRE_TX_BIN").unwrap_or_else(|_| {
-        args.get("pre-tx-bin").cloned().unwrap_or_else(|| {
-            eprintln!("❌ pre_tx hook requires SPEL_PRE_TX_BIN env var or --pre-tx-bin <path>");
-            eprintln!("   The binary receives JSON on stdin and returns JSON with hook outputs");
-            process::exit(1);
-        })
-    });
-
-    // Build input JSON: {nsk, method, args...}
-    let mut input = serde_json::json!({
-        "nsk": nsk_hex,
-        "method": hook.method,
-    });
-    // Pass all instruction args to the hook binary
-    for (k, v) in args {
-        input[k] = serde_json::Value::String(v.clone());
-    }
-
-    // Call the pre-tx binary
-    let mut child = std::process::Command::new(&bin_path)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .unwrap_or_else(|e| {
-            eprintln!("❌ Failed to spawn pre-tx binary '{}': {}", bin_path, e);
-            process::exit(1);
-        });
-
-    let stdin = child.stdin.as_mut().unwrap();
-    stdin.write_all(input.to_string().as_bytes()).unwrap();
-    drop(child.stdin.take());
-
-    let output = child.wait_with_output().unwrap_or_else(|e| {
-        eprintln!("❌ pre-tx binary failed: {}", e);
-        process::exit(1);
-    });
-
-    if !output.status.success() {
-        eprintln!("❌ pre-tx binary exited with status {}", output.status);
-        process::exit(1);
-    }
-
-    // Parse output JSON
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
-        eprintln!("❌ pre-tx binary returned invalid JSON: {}", e);
-        process::exit(1);
-    });
-
-    // Extract outputs
-    let mut outputs = std::collections::HashMap::new();
-    for output_name in &hook.outputs {
-        let val = result.get(output_name).unwrap_or_else(|| {
-            eprintln!("❌ pre-tx output '{}' not found in binary result", output_name);
-            process::exit(1);
-        });
-        let s = val.as_str().unwrap_or_else(|| {
-            eprintln!("❌ pre-tx output '{}' must be a string", output_name);
-            process::exit(1);
-        });
-        outputs.insert(output_name.clone(), s.to_string());
-        println!("   pre_tx {}: {}...{}", output_name, &s[..8.min(s.len())], &s[s.len().saturating_sub(8)..]);
-    }
-
-    outputs
-}
 
 /// Execute an instruction: parse args, build TX, optionally submit.
 pub async fn execute_instruction(
@@ -165,20 +65,6 @@ pub async fn execute_instruction(
     if !missing.is_empty() {
         eprintln!("❌ Missing required arguments: {}", missing.join(", "));
         process::exit(1);
-    }
-
-    // Execute pre_tx hook if present (ZK proof generation)
-    if let Some(hook) = &ix.pre_tx {
-        println!("🔐 Running pre-tx hook: {}", hook.method);
-        let wallet_for_hook = WalletCore::from_env().unwrap_or_else(|e| {
-            eprintln!("❌ Failed to initialize wallet for pre_tx hook: {:?}", e);
-            process::exit(1);
-        });
-        let hook_outputs = run_pre_tx_hook(hook, &args, &wallet_for_hook);
-        // Inject hook outputs into args so they're serialized into instruction data
-        for (k, v) in hook_outputs {
-            args.insert(k, v);
-        }
     }
 
     // Parse instruction args
