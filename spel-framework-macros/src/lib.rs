@@ -1073,20 +1073,11 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo], external_
                         let name = &inp.name;
                         let type_ = &inp.type_;
                         let source = &inp.source;
-                        let source_lit = if source == "wallet_nsk" {
-                            quote! { spel_framework::idl::IdlPreTxInputSource::WalletNsk }
-                        } else if let Some(arg_name) = source.strip_prefix("arg:") {
-                            quote! { spel_framework::idl::IdlPreTxInputSource::Arg { name: #arg_name.to_string() } }
-                        } else if let Some(val) = source.strip_prefix("literal:") {
-                            quote! { spel_framework::idl::IdlPreTxInputSource::Literal { value: #val.to_string() } }
-                        } else {
-                            quote! { spel_framework::idl::IdlPreTxInputSource::Arg { name: #source.to_string() } }
-                        };
                         quote! {
                             spel_framework::idl::IdlPreTxInput {
                                 name: #name.to_string(),
                                 type_: #type_.to_string(),
-                                source: #source_lit,
+                                source: #source.to_string(),
                             }
                         }
                     })
