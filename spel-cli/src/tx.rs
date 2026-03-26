@@ -19,6 +19,53 @@ use risc0_zkvm::{ExecutorEnv, default_prover};
 // IdlPreTxInputSource removed — source is now a plain string
 
 
+/// Serialize a string value into the ExecutorEnv based on the IDL type tag.
+fn write_pre_tx_input(
+    builder: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
+    type_tag: &str,
+    val: &str,
+) {
+    match type_tag {
+        "bytes32" => {
+            let bytes = ::hex::decode(val).unwrap_or_else(|e| {
+                eprintln!("❌ Invalid hex for bytes32 '{}': {}", val, e);
+                process::exit(1);
+            });
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            builder.write(&arr).expect("failed to write bytes32");
+        }
+        "u64" => {
+            let v: u64 = val.parse().unwrap_or_else(|e| {
+                eprintln!("❌ Invalid u64 '{}': {}", val, e);
+                process::exit(1);
+            });
+            builder.write(&v).expect("failed to write u64");
+        }
+        "string" => {
+            builder.write(&val.to_string()).expect("failed to write string");
+        }
+        "vec_bytes32" => {
+            let items: Vec<[u8; 32]> = val.split(',')
+                .map(|s| {
+                    let bytes = ::hex::decode(s.trim()).unwrap_or_else(|e| {
+                        eprintln!("❌ Invalid hex in vec_bytes32 '{}': {}", s, e);
+                        process::exit(1);
+                    });
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    arr
+                })
+                .collect();
+            builder.write(&items).expect("failed to write vec_bytes32");
+        }
+        other => {
+            eprintln!("❌ Unknown pre_tx input type '{}' — supported: bytes32, u64, string, vec_bytes32", other);
+            process::exit(1);
+        }
+    }
+}
+
 /// Read one output field from the journal bytes at the given offset.
 /// Returns (hex_encoded_value, bytes_consumed).
 fn read_journal_field(journal: &[u8], offset: usize, name: &str) -> (String, usize) {
@@ -63,66 +110,26 @@ async fn run_pre_tx_hook(
             process::exit(1);
         });
 
-    // Build a JSON object with all inputs for the guest to deserialize as a struct
+    // Build ExecutorEnv by writing each input in declaration order
     let mut env_builder = ExecutorEnv::builder();
-    let mut json_map = serde_json::Map::new();
 
     for input in &hook.inputs {
-        let value = if input.source == "wallet_nsk" {
-            serde_json::json!(nsk.to_vec())
-        } else {
-            let raw_val = if let Some(arg_name) = input.source.strip_prefix("arg:") {
-                let key = snake_to_kebab(arg_name);
-                args.get(&key).unwrap_or_else(|| {
-                    eprintln!("❌ pre_tx input '{}' requires --{}", input.name, key);
-                    process::exit(1);
-                }).clone()
-            } else if let Some(literal) = input.source.strip_prefix("literal:") {
-                literal.to_string()
-            } else {
-                eprintln!("❌ Unknown source '{}' for input '{}'", input.source, input.name);
+        if input.source == "wallet_nsk" {
+            env_builder.write(&nsk).expect("failed to write NSK");
+        } else if let Some(arg_name) = input.source.strip_prefix("arg:") {
+            let key = snake_to_kebab(arg_name);
+            let val = args.get(&key).unwrap_or_else(|| {
+                eprintln!("❌ pre_tx input '{}' requires --{}", input.name, key);
                 process::exit(1);
-            };
-            match input.type_.as_str() {
-                "bytes32" => {
-                    let bytes = ::hex::decode(&raw_val).unwrap_or_else(|e| {
-                        eprintln!("❌ Invalid hex for bytes32 '{}': {}", raw_val, e);
-                        process::exit(1);
-                    });
-                    serde_json::json!(bytes)
-                }
-                "u64" => {
-                    let v: u64 = raw_val.parse().unwrap_or_else(|e| {
-                        eprintln!("❌ Invalid u64 '{}': {}", raw_val, e);
-                        process::exit(1);
-                    });
-                    serde_json::json!(v)
-                }
-                "string" => {
-                    serde_json::json!(raw_val)
-                }
-                "vec_bytes32" => {
-                    let items: Vec<Vec<u8>> = raw_val.split(',')
-                        .map(|s| {
-                            ::hex::decode(s.trim()).unwrap_or_else(|e| {
-                                eprintln!("❌ Invalid hex in vec_bytes32 '{}': {}", s, e);
-                                process::exit(1);
-                            })
-                        })
-                        .collect();
-                    serde_json::json!(items)
-                }
-                other => {
-                    eprintln!("❌ Unknown pre_tx input type '{}' — supported: bytes32, u64, string, vec_bytes32", other);
-                    process::exit(1);
-                }
-            }
-        };
-        json_map.insert(input.name.clone(), value);
+            }).clone();
+            write_pre_tx_input(&mut env_builder, &input.type_, &val);
+        } else if let Some(value) = input.source.strip_prefix("literal:") {
+            write_pre_tx_input(&mut env_builder, &input.type_, value);
+        } else {
+            eprintln!("❌ Unknown source '{}' for input '{}'", input.source, input.name);
+            process::exit(1);
+        }
     }
-
-    let json_obj = serde_json::Value::Object(json_map);
-    env_builder.write(&json_obj).expect("failed to write pre_tx inputs");
 
     let env = env_builder.build().unwrap_or_else(|e| {
         eprintln!("❌ Failed to build executor env: {}", e);
