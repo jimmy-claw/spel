@@ -69,7 +69,7 @@ fn write_pre_tx_input(
 /// Read one output field from the journal bytes at the given offset.
 /// Returns (hex_encoded_value, bytes_consumed).
 fn read_journal_field(journal: &[u8], offset: usize, name: &str) -> (String, usize) {
-    if name == "receipt" {
+    if name == "receipt" || name.ends_with("_receipt") {
         // Receipt = entire journal
         let remaining = &journal[offset..];
         (::hex::encode(remaining), remaining.len())
@@ -159,7 +159,7 @@ async fn run_pre_tx_hook(
         println!("  {} → {}...{}", output_name,
             &val_hex[..8.min(val_hex.len())],
             &val_hex[val_hex.len().saturating_sub(8)..]);
-        args.insert(output_name.clone(), val_hex);
+        let kebab_key = output_name.replace("_", "-"); args.insert(output_name.clone(), val_hex.clone()); args.insert(kebab_key, val_hex);
         offset += consumed;
     }
 
