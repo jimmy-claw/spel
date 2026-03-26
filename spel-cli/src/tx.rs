@@ -16,7 +16,7 @@ use crate::cli::{snake_to_kebab, to_pascal_case};
 use wallet::WalletCore;
 use nssa_core::NullifierSecretKey as _NullifierSecretKey;
 use risc0_zkvm::{ExecutorEnv, default_prover};
-use spel_framework_core::idl::IdlPreTxInputSource;
+// IdlPreTxInputSource removed — source is now a plain string
 
 
 /// Serialize a string value into the ExecutorEnv based on the IDL type tag.
@@ -114,21 +114,20 @@ async fn run_pre_tx_hook(
     let mut env_builder = ExecutorEnv::builder();
 
     for input in &hook.inputs {
-        match &input.source {
-            IdlPreTxInputSource::WalletNsk => {
-                env_builder.write(&nsk).expect("failed to write NSK");
-            }
-            IdlPreTxInputSource::Arg { name } => {
-                let key = snake_to_kebab(name);
-                let val = args.get(&key).unwrap_or_else(|| {
-                    eprintln!("❌ pre_tx input '{}' requires --{}", input.name, key);
-                    process::exit(1);
-                }).clone();
-                write_pre_tx_input(&mut env_builder, &input.type_, &val);
-            }
-            IdlPreTxInputSource::Literal { value } => {
-                write_pre_tx_input(&mut env_builder, &input.type_, value);
-            }
+        if input.source == "wallet_nsk" {
+            env_builder.write(&nsk).expect("failed to write NSK");
+        } else if let Some(arg_name) = input.source.strip_prefix("arg:") {
+            let key = snake_to_kebab(arg_name);
+            let val = args.get(&key).unwrap_or_else(|| {
+                eprintln!("❌ pre_tx input '{}' requires --{}", input.name, key);
+                process::exit(1);
+            }).clone();
+            write_pre_tx_input(&mut env_builder, &input.type_, &val);
+        } else if let Some(value) = input.source.strip_prefix("literal:") {
+            write_pre_tx_input(&mut env_builder, &input.type_, value);
+        } else {
+            eprintln!("❌ Unknown source '{}' for input '{}'", input.source, input.name);
+            process::exit(1);
         }
     }
 

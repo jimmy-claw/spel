@@ -58,27 +58,16 @@ pub struct IdlExecution {
 
 /// An instruction in the IDL.
 
-/// Source of a pre_tx input value.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "source", rename_all = "snake_case")]
-pub enum IdlPreTxInputSource {
-    /// NSK resolved from the wallet keystore for the caller account.
-    WalletNsk,
-    /// Value taken from instruction arg with this name.
-    Arg { name: String },
-    /// Hard-coded string literal.
-    Literal { value: String },
-}
-
 /// One input to the pre_tx guest ELF.
+/// source format: "wallet_nsk" | "arg:field_name" | "literal:value"
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdlPreTxInput {
     /// Field name in the guest input struct.
     pub name: String,
     /// Borsh-serializable type tag (bytes32, u64, string, vec_bytes32, ...).
     pub type_: String,
-    /// Where to get the value from.
-    pub source: IdlPreTxInputSource,
+    /// Source: "wallet_nsk" | "arg:field_name" | "literal:value"
+    pub source: String,
 }
 
 /// Pre-transaction hook for ZK proof generation.

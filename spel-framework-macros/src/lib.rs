@@ -1213,9 +1213,13 @@ fn generate_idl_json(mod_name: &Ident, instructions: &[InstructionInfo], externa
                     .map(|o| format!("\"{}\"", o))
                     .collect();
                 let outputs_join = outputs_strs.join(",");
+                let inputs_json = hook.inputs.iter()
+                    .map(|inp| format!("{{\"name\":\"{}\",\"type_\":\"{}\",\"source\":\"{}\"}}", inp.name, inp.type_, inp.source))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 format!(
-                    "{{\"signer_arg\":\"{}\",\"elf\":\"{}\",\"outputs\":[{}]}}",
-                    hook.signer_arg, hook.elf, outputs_join
+                    "{{\"signer_arg\":\"{}\",\"elf\":\"{}\",\"inputs\":[{}],\"outputs\":[{}]}}",
+                    hook.signer_arg, hook.elf, inputs_json, outputs_join
                 )
             } else {
                 String::new()
