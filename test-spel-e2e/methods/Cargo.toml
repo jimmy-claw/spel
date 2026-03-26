@@ -1,0 +1,11 @@
+[package]
+name = "test_spel_e2e-methods"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+risc0-build = "=3.0.5"
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.5", features = ["std"] }
+test_spel_e2e_core = { path = "../test_spel_e2e_core" }

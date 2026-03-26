@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "test_spel_e2e_core",
+    "methods",
+    "examples",
+]
+exclude = [
+    "methods/guest",
+]
+resolver = "2"

@@ -1,0 +1,5 @@
+target/
+methods/guest/target/
+*.bin
+.test_spel_project-state
+.test_spel_project-state.tmp

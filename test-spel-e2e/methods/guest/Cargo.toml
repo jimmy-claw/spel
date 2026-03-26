@@ -1,0 +1,19 @@
+[package]
+name = "test_spel_e2e-guest"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "test_spel_e2e"
+path = "src/bin/test_spel_e2e.rs"
+
+[dependencies]
+lez-framework = { git = "https://github.com/jimmy-claw/lez-framework.git" }
+nssa_core = { git = "https://github.com/logos-blockchain/lssa.git", rev = "767b5afd388c7981bcdf6f5b5c80159607e07e5b" }
+risc0-zkvm = { version = "=3.0.5", default-features = false }
+test_spel_e2e_core = { path = "../../test_spel_e2e_core" }
+serde = { version = "1.0", features = ["derive"] }
+borsh = "1.5"
+

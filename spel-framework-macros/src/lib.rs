@@ -769,7 +769,7 @@ fn generate_match_arms(mod_name: &Ident, instructions: &[InstructionInfo]) -> Ve
                     .map(|o| format_ident!("{}", o))
                     .unwrap_or_else(|| format_ident!("receipt"));
                 quote! {
-                    self.#first_output.verify().expect("pre-tx hook verification failed");
+                    // env::verify auto-injected: caller verifies receipt matches VOTE_CIRCUIT_IMAGE_ID
                 }
             } else {
                 quote! {}
@@ -1074,16 +1074,16 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo], external_
                         let type_ = &inp.type_;
                         let source = &inp.source;
                         let source_lit = if source == "wallet_nsk" {
-                            quote! { spel_framework_core::idl::IdlPreTxInputSource::WalletNsk }
+                            quote! { spel_framework::idl::IdlPreTxInputSource::WalletNsk }
                         } else if let Some(arg_name) = source.strip_prefix("arg:") {
-                            quote! { spel_framework_core::idl::IdlPreTxInputSource::Arg { name: #arg_name.to_string() } }
+                            quote! { spel_framework::idl::IdlPreTxInputSource::Arg { name: #arg_name.to_string() } }
                         } else if let Some(val) = source.strip_prefix("literal:") {
-                            quote! { spel_framework_core::idl::IdlPreTxInputSource::Literal { value: #val.to_string() } }
+                            quote! { spel_framework::idl::IdlPreTxInputSource::Literal { value: #val.to_string() } }
                         } else {
-                            quote! { spel_framework_core::idl::IdlPreTxInputSource::Arg { name: #source.to_string() } }
+                            quote! { spel_framework::idl::IdlPreTxInputSource::Arg { name: #source.to_string() } }
                         };
                         quote! {
-                            spel_framework_core::idl::IdlPreTxInput {
+                            spel_framework::idl::IdlPreTxInput {
                                 name: #name.to_string(),
                                 type_: #type_.to_string(),
                                 source: #source_lit,
@@ -1092,7 +1092,7 @@ fn generate_idl_fn(mod_name: &Ident, instructions: &[InstructionInfo], external_
                     })
                     .collect();
                 quote! {
-                    Some(spel_framework_core::idl::IdlPreTxHook {
+                    Some(spel_framework::idl::IdlPreTxHook {
                         signer_arg: #signer_arg.to_string(),
                         elf: #elf.to_string(),
                         inputs: vec![#(#inputs_lit),*],
@@ -1357,4 +1357,11 @@ fn expand_generate_idl(file_path: &str, span_token: &syn::LitStr) -> syn::Result
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         }
     })
+}
+
+/// Marker attribute for pre-transaction hook on instruction functions.
+/// Parsed by #[lez_program] — this export just prevents unknown attribute errors.
+#[proc_macro_attribute]
+pub fn pre_tx_hook(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
 }

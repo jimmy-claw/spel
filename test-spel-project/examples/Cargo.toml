@@ -1,0 +1,20 @@
+[package]
+name = "test_spel_project-examples"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "generate_idl"
+path = "src/bin/generate_idl.rs"
+
+[[bin]]
+name = "test_spel_project_cli"
+path = "src/bin/test_spel_project_cli.rs"
+
+[dependencies]
+lez-framework = { git = "https://github.com/jimmy-claw/lez-framework.git" }
+nssa_core = { git = "https://github.com/logos-blockchain/lssa.git", rev = "767b5afd388c7981bcdf6f5b5c80159607e07e5b" }
+lez-cli = { git = "https://github.com/jimmy-claw/lez-framework.git" }
+test_spel_project_core = { path = "../test_spel_project_core" }
+serde_json = "1.0"
+tokio = { version = "1.28.2", features = ["net", "rt-multi-thread", "sync", "macros"] }
