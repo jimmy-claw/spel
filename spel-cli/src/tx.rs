@@ -14,6 +14,158 @@ use crate::serialize::serialize_to_risc0;
 use crate::pda::compute_pda_from_seeds;
 use crate::cli::{snake_to_kebab, to_pascal_case};
 use wallet::WalletCore;
+use nssa_core::NullifierSecretKey as _NullifierSecretKey;
+use risc0_zkvm::{ExecutorEnv, default_prover};
+use spel_framework_core::idl::IdlPreTxInputSource;
+
+
+/// Serialize a string value into the ExecutorEnv based on the IDL type tag.
+fn write_pre_tx_input(
+    builder: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
+    type_tag: &str,
+    val: &str,
+) {
+    match type_tag {
+        "bytes32" => {
+            let bytes = ::hex::decode(val).unwrap_or_else(|e| {
+                eprintln!("❌ Invalid hex for bytes32 '{}': {}", val, e);
+                process::exit(1);
+            });
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            builder.write(&arr).expect("failed to write bytes32");
+        }
+        "u64" => {
+            let v: u64 = val.parse().unwrap_or_else(|e| {
+                eprintln!("❌ Invalid u64 '{}': {}", val, e);
+                process::exit(1);
+            });
+            builder.write(&v).expect("failed to write u64");
+        }
+        "string" => {
+            builder.write(&val.to_string()).expect("failed to write string");
+        }
+        "vec_bytes32" => {
+            let items: Vec<[u8; 32]> = val.split(',')
+                .map(|s| {
+                    let bytes = ::hex::decode(s.trim()).unwrap_or_else(|e| {
+                        eprintln!("❌ Invalid hex in vec_bytes32 '{}': {}", s, e);
+                        process::exit(1);
+                    });
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    arr
+                })
+                .collect();
+            builder.write(&items).expect("failed to write vec_bytes32");
+        }
+        other => {
+            eprintln!("❌ Unknown pre_tx input type '{}' — supported: bytes32, u64, string, vec_bytes32", other);
+            process::exit(1);
+        }
+    }
+}
+
+/// Read one output field from the journal bytes at the given offset.
+/// Returns (hex_encoded_value, bytes_consumed).
+fn read_journal_field(journal: &[u8], offset: usize, name: &str) -> (String, usize) {
+    if name == "receipt" {
+        // Receipt = entire journal
+        let remaining = &journal[offset..];
+        (::hex::encode(remaining), remaining.len())
+    } else {
+        // Default: 32-byte field (nullifier, hash, etc.)
+        if offset + 32 > journal.len() {
+            eprintln!("❌ Journal too short to read '{}' at offset {}", name, offset);
+            process::exit(1);
+        }
+        (::hex::encode(&journal[offset..offset+32]), 32)
+    }
+}
+
+/// Execute a pre_tx hook: resolve inputs from wallet + args, run guest ELF, inject outputs into args.
+async fn run_pre_tx_hook(
+    hook: &spel_framework_core::idl::IdlPreTxHook,
+    args: &mut HashMap<String, String>,
+    wallet_core: &WalletCore,
+) {
+    println!("🔐 Running pre_tx hook (elf: {})...", hook.elf);
+
+    // Resolve NSK for the caller account
+    let caller_key = snake_to_kebab(&hook.signer_arg);
+    let caller_str = args.get(&caller_key).unwrap_or_else(|| {
+        eprintln!("❌ pre_tx hook requires --{} <Private/xxx>", caller_key);
+        process::exit(1);
+    }).clone();
+
+    let id_str = caller_str.trim_start_matches("Private/");
+    let account_id: nssa::AccountId = id_str.parse().unwrap_or_else(|e| {
+        eprintln!("❌ Invalid account ID '{}': {}", caller_str, e);
+        process::exit(1);
+    });
+    let nsk = wallet_core
+        .get_account_nullifier_secret_key(account_id)
+        .unwrap_or_else(|| {
+            eprintln!("❌ Account '{}' not found in wallet keystore", caller_str);
+            process::exit(1);
+        });
+
+    // Build ExecutorEnv by writing each input in declaration order
+    let mut env_builder = ExecutorEnv::builder();
+
+    for input in &hook.inputs {
+        match &input.source {
+            IdlPreTxInputSource::WalletNsk => {
+                env_builder.write(&nsk).expect("failed to write NSK");
+            }
+            IdlPreTxInputSource::Arg { name } => {
+                let key = snake_to_kebab(name);
+                let val = args.get(&key).unwrap_or_else(|| {
+                    eprintln!("❌ pre_tx input '{}' requires --{}", input.name, key);
+                    process::exit(1);
+                }).clone();
+                write_pre_tx_input(&mut env_builder, &input.type_, &val);
+            }
+            IdlPreTxInputSource::Literal { value } => {
+                write_pre_tx_input(&mut env_builder, &input.type_, value);
+            }
+        }
+    }
+
+    let env = env_builder.build().unwrap_or_else(|e| {
+        eprintln!("❌ Failed to build executor env: {}", e);
+        process::exit(1);
+    });
+
+    // Load and execute the guest ELF
+    let elf_path = std::env::var("SPEL_GUEST_ELF").unwrap_or_else(|_| hook.elf.clone());
+    let elf_bytes = fs::read(&elf_path).unwrap_or_else(|e| {
+        eprintln!("❌ Failed to read guest ELF '{}': {}", elf_path, e);
+        eprintln!("   Set SPEL_GUEST_ELF to override path");
+        process::exit(1);
+    });
+
+    println!("  Proving...");
+    let prove_info = default_prover().prove(env, &elf_bytes).unwrap_or_else(|e| {
+        eprintln!("❌ Proof generation failed: {}", e);
+        process::exit(1);
+    });
+
+    let journal_bytes = prove_info.receipt.journal.bytes.clone();
+
+    // Extract outputs from journal in order
+    let mut offset = 0;
+    for output_name in &hook.outputs {
+        let (val_hex, consumed) = read_journal_field(&journal_bytes, offset, output_name);
+        println!("  {} → {}...{}", output_name,
+            &val_hex[..8.min(val_hex.len())],
+            &val_hex[val_hex.len().saturating_sub(8)..]);
+        args.insert(output_name.clone(), val_hex);
+        offset += consumed;
+    }
+
+    println!("✅ pre_tx hook complete");
+}
 
 /// Execute an instruction: parse args, build TX, optionally submit.
 pub async fn execute_instruction(
@@ -29,6 +181,15 @@ pub async fn execute_instruction(
     println!();
 
     let mut args = args.clone();
+
+    // Execute pre_tx hook if present (ZK proof generation before building tx)
+    if let Some(hook) = &ix.pre_tx {
+        let wallet_core = WalletCore::from_env().unwrap_or_else(|e| {
+            eprintln!("❌ Failed to initialize wallet for pre_tx hook: {:?}", e);
+            process::exit(1);
+        });
+        run_pre_tx_hook(hook, &mut args, &wallet_core).await;
+    }
 
     // Auto-fill program-id args from binary paths
     for (key, bin_path) in extra_bins {
