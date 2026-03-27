@@ -68,27 +68,37 @@ fn write_pre_tx_input(
 
 /// Read one output field from the journal bytes at the given offset.
 /// Returns (hex_encoded_value, bytes_consumed).
+///
+/// The journal uses risc0 serde format: each u8 in a [u8; 32] occupies one u32
+/// word (4 bytes LE).  A 32-byte field therefore spans 128 journal bytes.
+/// Receipt outputs return the *entire* journal (needed for on-chain env::verify).
 fn read_journal_field(journal: &[u8], offset: usize, name: &str) -> (String, usize) {
     if name == "receipt" || name.ends_with("_receipt") {
-        // Receipt = entire journal
-        let remaining = &journal[offset..];
-        (::hex::encode(remaining), remaining.len())
+        // Receipt = entire journal (for on-chain env::verify)
+        (::hex::encode(journal), journal.len() - offset)
     } else {
-        // Default: 32-byte field (nullifier, hash, etc.)
-        if offset + 32 > journal.len() {
-            eprintln!("❌ Journal too short to read '{}' at offset {}", name, offset);
+        // 32-byte field encoded via risc0 serde: 32 u32 words = 128 bytes
+        let byte_count = 32 * 4; // 128
+        if offset + byte_count > journal.len() {
+            eprintln!("❌ Journal too short to read '{}' at offset {} (need {})", name, offset, byte_count);
             process::exit(1);
         }
-        (::hex::encode(&journal[offset..offset+32]), 32)
+        let raw = &journal[offset..offset + byte_count];
+        // Compact: each 4-byte LE u32 word → 1 byte
+        let bytes: Vec<u8> = raw.chunks(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]) as u8)
+            .collect();
+        (::hex::encode(&bytes), byte_count)
     }
 }
 
 /// Execute a pre_tx hook: resolve inputs from wallet + args, run guest ELF, inject outputs into args.
+/// Returns the full Receipt so it can be passed as an assumption to the outer proof.
 async fn run_pre_tx_hook(
     hook: &spel_framework_core::idl::IdlPreTxHook,
     args: &mut HashMap<String, String>,
     wallet_core: &WalletCore,
-) {
+) -> Option<risc0_zkvm::Receipt> {
     println!("🔐 Running pre_tx hook (elf: {})...", hook.elf);
 
     // Resolve NSK for the caller account
@@ -163,7 +173,11 @@ async fn run_pre_tx_hook(
         offset += consumed;
     }
 
+    let receipt = prove_info.receipt.clone();
+
     println!("✅ pre_tx hook complete");
+
+    Some(receipt)
 }
 
 /// Execute an instruction: parse args, build TX, optionally submit.
@@ -182,13 +196,15 @@ pub async fn execute_instruction(
     let mut args = args.clone();
 
     // Execute pre_tx hook if present (ZK proof generation before building tx)
-    if let Some(hook) = &ix.pre_tx {
+    let pre_tx_receipt: Option<risc0_zkvm::Receipt> = if let Some(hook) = &ix.pre_tx {
         let wallet_core = WalletCore::from_env().unwrap_or_else(|e| {
             eprintln!("❌ Failed to initialize wallet for pre_tx hook: {:?}", e);
             process::exit(1);
         });
-        run_pre_tx_hook(hook, &mut args, &wallet_core).await;
-    }
+        run_pre_tx_hook(hook, &mut args, &wallet_core).await
+    } else {
+        None
+    };
 
     // Auto-fill program-id args from binary paths
     for (key, bin_path) in extra_bins {
@@ -486,10 +502,12 @@ pub async fn execute_instruction(
             }
         }
 
+        let assumptions = pre_tx_receipt.map(|r| vec![r]).unwrap_or_default();
         let (response, _shared_secrets) = wallet_core.send_privacy_preserving_tx(
             pp_accounts,
             instruction_data,
             &program_with_deps,
+            assumptions,
         ).await.unwrap_or_else(|e| {
             eprintln!("❌ Failed to submit privacy-preserving transaction: {:?}", e);
             process::exit(1);

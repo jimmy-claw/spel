@@ -157,13 +157,19 @@ fn parse_array(raw: &str, elem_type: &IdlType, size: usize) -> Result<ParsedValu
 }
 
 fn parse_vec(raw: &str, elem_type: &IdlType) -> Result<ParsedValue, String> {
+    // Empty string → empty vector for any element type
+    if raw.is_empty() {
+        return match elem_type {
+            IdlType::Primitive(p) if p == "u32" => Ok(ParsedValue::U32Array(vec![])),
+            IdlType::Primitive(p) if p == "u8" => Ok(ParsedValue::ByteArray(vec![])),
+            IdlType::Array { .. } => Ok(ParsedValue::ByteArrayVec(vec![])),
+            _ => Ok(ParsedValue::Raw(String::new())),
+        };
+    }
     match elem_type {
         IdlType::Array { array } => match &*array.0 {
             IdlType::Primitive(p) if p == "u8" => {
                 let size = array.1;
-                if raw.is_empty() {
-                    return Ok(ParsedValue::ByteArrayVec(vec![]));
-                }
                 let parts: Vec<&str> = raw.split(',').map(|s| s.trim()).collect();
                 let mut result = Vec::with_capacity(parts.len());
                 for (i, part) in parts.iter().enumerate() {
@@ -194,14 +200,31 @@ fn parse_vec(raw: &str, elem_type: &IdlType) -> Result<ParsedValue, String> {
                 Err(_) => Ok(ParsedValue::Raw(raw.to_string())),
             }
         }
-        // Vec<u32> — comma-separated decimal values
+        // Vec<u32> — comma-separated decimal values, or hex-encoded LE u32 words
         IdlType::Primitive(p) if p == "u32" => {
             let vals: Result<Vec<u32>, _> = raw.split(',')
                 .map(|s| s.trim().parse::<u32>())
                 .collect();
             match vals {
                 Ok(v) => Ok(ParsedValue::U32Array(v)),
-                Err(_) => Ok(ParsedValue::Raw(raw.to_string())),
+                Err(_) => {
+                    // Try hex decode → LE u32 words (e.g. from pre_tx hook journal)
+                    let hex_str = raw.strip_prefix("0x")
+                        .or_else(|| raw.strip_prefix("0X"))
+                        .unwrap_or(raw);
+                    if !hex_str.is_empty()
+                        && hex_str.len() % 8 == 0
+                        && hex_str.chars().all(|c| c.is_ascii_hexdigit())
+                    {
+                        let bytes = hex_decode(hex_str)?;
+                        let vals: Vec<u32> = bytes.chunks(4)
+                            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+                        Ok(ParsedValue::U32Array(vals))
+                    } else {
+                        Ok(ParsedValue::Raw(raw.to_string()))
+                    }
+                }
             }
         }
         _ => Ok(ParsedValue::Raw(raw.to_string())),

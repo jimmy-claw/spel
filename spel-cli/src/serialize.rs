@@ -130,6 +130,8 @@ fn serialize_vec_risc0(out: &mut Vec<u32>, elem_type: &IdlType, val: &ParsedValu
                 }
             }
         }
+        // Empty Raw string -> serialize as empty vec
+        (_, ParsedValue::Raw(s)) if s.trim().is_empty() => { out.push(0u32); }
         _ => {
             eprintln!("⚠️  Cannot serialize Vec type in risc0 format: {:?}", val);
         }
