@@ -175,6 +175,13 @@ async fn run_pre_tx_hook(
 
     let receipt = prove_info.receipt.clone();
 
+    // Debug: print claim digest
+    if let Ok(claim) = receipt.claim() {
+        use risc0_zkvm::sha::Digestible;
+        println!("  circuit receipt claim digest: {}", claim.digest());
+        println!("  circuit receipt journal ({} bytes): {:02x?}", receipt.journal.bytes.len(), &receipt.journal.bytes);
+    }
+
     println!("✅ pre_tx hook complete");
 
     Some(receipt)
@@ -445,7 +452,8 @@ pub async fn execute_instruction(
     let has_private = parsed_accounts.iter().any(|(_, _, is_priv)| *is_priv)
         || rest_accounts.iter().any(|(_, entries)| entries.iter().any(|(_, is_priv)| *is_priv));
 
-    if has_private {
+    // Also use privacy-preserving path if we have a pre_tx receipt (needs assumptions)
+    if has_private || pre_tx_receipt.is_some() {
         // ─── Privacy-preserving transaction ──────────────────
         use wallet::PrivacyPreservingAccount;
         use nssa::privacy_preserving_transaction::circuit::ProgramWithDependencies;

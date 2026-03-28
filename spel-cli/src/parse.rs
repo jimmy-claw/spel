@@ -190,14 +190,23 @@ fn parse_vec(raw: &str, elem_type: &IdlType) -> Result<ParsedValue, String> {
             }
             _ => Ok(ParsedValue::Raw(raw.to_string())),
         },
-        // Vec<u8> — comma-separated decimal values
+        // Vec<u8> — comma-separated decimal values, or hex string
         IdlType::Primitive(p) if p == "u8" => {
             let bytes: Result<Vec<u8>, _> = raw.split(',')
                 .map(|s| s.trim().parse::<u8>())
                 .collect();
             match bytes {
                 Ok(b) => Ok(ParsedValue::ByteArray(b)),
-                Err(_) => Ok(ParsedValue::Raw(raw.to_string())),
+                Err(_) => {
+                    // Try hex decode
+                    let hex_str = raw.strip_prefix("0x")
+                        .or_else(|| raw.strip_prefix("0X"))
+                        .unwrap_or(raw);
+                    match hex_decode(hex_str) {
+                        Ok(b) => Ok(ParsedValue::ByteArray(b)),
+                        Err(_) => Ok(ParsedValue::Raw(raw.to_string())),
+                    }
+                }
             }
         }
         // Vec<u32> — comma-separated decimal values, or hex-encoded LE u32 words
