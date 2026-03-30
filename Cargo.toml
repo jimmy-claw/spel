@@ -10,6 +10,6 @@ exclude = ["tests/e2e/fixture_program"]
 resolver = "2"
 
 [patch."https://github.com/logos-blockchain/lssa.git"]
-nssa_core = { path = "/home/jimmy/lssa/nssa/core" }
-nssa = { path = "/home/jimmy/lssa/nssa" }
-wallet = { path = "/home/jimmy/lssa/wallet" }
+nssa_core = { git = "https://github.com/jimmy-claw/lssa", branch = "jimmy/wallet-zk-helpers" }
+nssa = { git = "https://github.com/jimmy-claw/lssa", branch = "jimmy/wallet-zk-helpers" }
+wallet = { git = "https://github.com/jimmy-claw/lssa", branch = "jimmy/wallet-zk-helpers" }
