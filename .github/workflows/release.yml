@@ -134,7 +134,7 @@ jobs:
           git commit -m "chore: release v${VERSION}"
           # Delete stale remote branch if exists from previous failed run
           git push origin --delete "release/v${VERSION}" 2>/dev/null || true
-          git push origin "release/v${VERSION}"
+          git push --force origin "release/v${VERSION}"
 
       # ── Open PR ───────────────────────────────────────────────────────
       - name: Create Release PR
