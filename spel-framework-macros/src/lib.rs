@@ -153,6 +153,8 @@ struct InstructionInfo {
     accounts: Vec<AccountParam>,
     /// Non-account parameters (the instruction args)
     args: Vec<ArgParam>,
+    /// Pre-transaction hook, if any
+    pre_tx_hook: Option<PreTxHook>,
     /// The original function item (with #[instruction] stripped)
     func: ItemFn,
 }
@@ -183,6 +185,27 @@ enum PdaSeedDef {
     Account(String),
     /// `arg("some_arg")` — seed derived from an instruction argument
     Arg(String),
+}
+
+/// One input to the pre_tx guest ELF.
+#[derive(Clone)]
+struct PreTxInput {
+    name: String,
+    type_: String,
+    source: String, // "wallet_nsk", "arg:name", or "literal:value"
+}
+
+/// Pre-transaction hook specification parsed from #[pre_tx_hook(...)].
+#[derive(Clone)]
+struct PreTxHook {
+    /// Which instruction argument is the caller's account (e.g. "caller").
+    signer_arg: String,
+    /// Path to the guest ELF binary.
+    elf: String,
+    /// Ordered inputs to the guest ELF.
+    inputs: Vec<PreTxInput>,
+    /// Output field names from the journal (e.g. ["receipt", "nullifier"]).
+    outputs: Vec<String>,
 }
 
 struct ArgParam {

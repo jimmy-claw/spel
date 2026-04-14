@@ -71,6 +71,28 @@ pub struct IdlInstruction {
     /// Variant name in PascalCase (lssa-lang compat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
+    /// Optional pre-transaction ZK proof hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_tx: Option<IdlPreTxHook>,
+}
+
+/// Pre-transaction hook: executes a ZK guest ELF before submitting the instruction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlPreTxHook {
+    pub signer_arg: String,
+    pub elf: String,
+    pub inputs: Vec<IdlPreTxInput>,
+    pub outputs: Vec<String>,
+}
+
+/// An input to a pre_tx hook guest program.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlPreTxInput {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    /// Source of the input value: "wallet_nsk", "arg:name", or "literal:value".
+    pub source: String,
 }
 
 /// An account expected by an instruction.
