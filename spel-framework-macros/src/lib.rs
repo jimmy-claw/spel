@@ -429,10 +429,14 @@ fn parse_instruction(func: ItemFn) -> syn::Result<InstructionInfo> {
         }
     }
 
+    // Extract #[pre_tx_hook(...)] attribute from the function, if present.
+    let pre_tx_hook = parse_pre_tx_hook(&func.attrs)?;
+
     Ok(InstructionInfo {
         fn_name,
         accounts,
         args,
+        pre_tx_hook,
         func,
     })
 }
@@ -470,6 +474,101 @@ fn is_vec_account_type(ty: &Type) -> bool {
         }
     }
     false
+}
+
+/// Parse an optional `#[pre_tx_hook(...)]` attribute from a function's attributes.
+///
+/// Expected syntax:
+/// ```ignore
+/// #[pre_tx_hook(
+///     signer = "caller",
+///     elf = "path/to/guest.elf",
+///     inputs(wallet_nsk, arg:amount, literal:some_value),
+///     outputs(receipt, nullifier),
+/// )]
+/// ```
+fn parse_pre_tx_hook(attrs: &[Attribute]) -> syn::Result<Option<PreTxHook>> {
+    for attr in attrs {
+        if attr.path().is_ident("pre_tx_hook") {
+            let mut signer_arg = None;
+            let mut elf = None;
+            let mut inputs = Vec::new();
+            let mut outputs = Vec::new();
+
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("signer") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    signer_arg = Some(lit.value());
+                    Ok(())
+                } else if meta.path.is_ident("elf") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    elf = Some(lit.value());
+                    Ok(())
+                } else if meta.path.is_ident("inputs") {
+                    // Parse inputs as a parenthesized list of identifiers/expressions
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let punctuated: syn::punctuated::Punctuated<syn::LitStr, syn::Token![,]> =
+                        content.parse_terminated(|input| input.parse::<syn::LitStr>(), syn::Token![,])?;
+                    for lit in punctuated {
+                        let s = lit.value();
+                        let (name, source) = if s == "wallet_nsk" {
+                            ("wallet_nsk".to_string(), "wallet_nsk".to_string())
+                        } else if let Some(arg_name) = s.strip_prefix("arg:") {
+                            (arg_name.to_string(), format!("arg:{arg_name}"))
+                        } else if let Some(lit_val) = s.strip_prefix("literal:") {
+                            (lit_val.to_string(), format!("literal:{lit_val}"))
+                        } else {
+                            return Err(syn::Error::new(
+                                lit.span(),
+                                "input must be \"wallet_nsk\", \"arg:name\", or \"literal:value\"",
+                            ));
+                        };
+                        // Derive type_ from source convention
+                        let type_ = if source == "wallet_nsk" {
+                            "nsk".to_string()
+                        } else {
+                            "bytes".to_string()
+                        };
+                        inputs.push(PreTxInput {
+                            name,
+                            type_,
+                            source,
+                        });
+                    }
+                    Ok(())
+                } else if meta.path.is_ident("outputs") {
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let punctuated: syn::punctuated::Punctuated<syn::LitStr, syn::Token![,]> =
+                        content.parse_terminated(|input| input.parse::<syn::LitStr>(), syn::Token![,])?;
+                    for lit in punctuated {
+                        outputs.push(lit.value());
+                    }
+                    Ok(())
+                } else {
+                    Err(meta.error("unknown pre_tx_hook attribute"))
+                }
+            })?;
+
+            let signer_arg = signer_arg.ok_or_else(|| {
+                syn::Error::new_spanned(attr, "pre_tx_hook requires `signer` field")
+            })?;
+            let elf = elf.ok_or_else(|| {
+                syn::Error::new_spanned(attr, "pre_tx_hook requires `elf` field")
+            })?;
+
+            return Ok(Some(PreTxHook {
+                signer_arg,
+                elf,
+                inputs,
+                outputs,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 fn parse_account_constraints(attrs: &[Attribute]) -> syn::Result<AccountConstraints> {
