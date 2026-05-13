@@ -15,13 +15,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "unit"
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy (workspace, all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build (framework + codegen)
         run: cargo build -p spel-framework -p spel-framework-core -p spel-framework-macros -p spel-client-gen
       - name: Unit tests
         run: cargo test -p spel-framework-core -p spel-framework-macros -p spel-client-gen
+      - name: Docs (no warnings)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps -p spel-framework -p spel-framework-core -p spel-framework-macros -p spel-client-gen
 
   e2e-tests:
     name: E2E Tests
